@@ -1,6 +1,8 @@
 ## [Unreleased]
 
 ### Added
+- Ampache API: Actions `catalogs` and `catalog`, presenting the library as the two synthetic catalogs `music` and `podcasts` which the action `browse` has always used
+  [#144](https://github.com/nc-music/music/issues/144)
 - Admin settings UI to setup Last.fm API key and secret without editing `config.php` manually
   [#131](https://github.com/nc-music/music/pull/131) @mattwellss
 - Possibility to configure the default volume with the config.php key `music.default_volume`
