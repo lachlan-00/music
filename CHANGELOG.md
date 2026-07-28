@@ -1,6 +1,7 @@
 ## [Unreleased]
 
 ### Added
+- Ampache API: Actions `smartlists`, `smartlist`, `smartlist_songs`, and `smartlist_delete`, operating on the built-in "All tracks" list which was previously reachable only via `user_smartlists` or by knowing the playlist ID -1
 - Admin settings UI to setup Last.fm API key and secret without editing `config.php` manually
   [#131](https://github.com/nc-music/music/pull/131) @mattwellss
 - Possibility to configure the default volume with the config.php key `music.default_volume`

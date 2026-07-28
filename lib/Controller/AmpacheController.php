@@ -721,6 +721,52 @@ class AmpacheController extends ApiController {
 	}
 
 	#[AmpacheAPI]
+	protected function smartlists(?string $filter, int $limit, int $offset = 0, bool $exact = false, bool $include = false) : array {
+		$lists = [$this->getAllTracksPlaylist()];
+
+		if (!empty($filter)) {
+			$lists = \array_values(\array_filter($lists, fn (Playlist $list) => $exact
+				? StringUtil::caselessEqual($list->getName(), $filter)
+				: \stripos((string)$list->getName(), $filter) !== false));
+		}
+
+		return $this->renderPlaylists(\array_slice($lists, $offset, $limit), $include);
+	}
+
+	#[AmpacheAPI]
+	protected function smartlist(string $filter, bool $include = false) : array {
+		return $this->renderPlaylists([$this->findSmartlist($filter)], $include);
+	}
+
+	#[AmpacheAPI]
+	protected function smartlist_songs(string $filter, int $limit, int $offset = 0, bool $random = false) : array {
+		$this->findSmartlist($filter);
+		return $this->playlist_songs(self::ALL_TRACKS_PLAYLIST_ID, $limit, $offset, $random);
+	}
+
+	#[AmpacheAPI]
+	protected function smartlist_delete(string $filter) : array {
+		// Validate the argument first, so that a bad id is reported as such instead of as a refusal to delete
+		$this->findSmartlist($filter);
+		throw new AmpacheException('The built-in smart list can not be deleted', 403);
+	}
+
+	/**
+	 * The app has no user-definable smart lists and the only one it has is the built-in "All tracks". Ampache
+	 * identifies its smart lists with ids of the form "smart_<n>" and a client may pass an id back in that
+	 * form, while our own playlist actions use the bare id, so both spellings are accepted here.
+	 */
+	private function findSmartlist(string $filter) : Playlist {
+		$id = StringUtil::startsWith($filter, 'smart_') ? \substr($filter, \strlen('smart_')) : $filter;
+
+		if (!\is_numeric($id) || (int)$id !== self::ALL_TRACKS_PLAYLIST_ID) {
+			throw new AmpacheException("Smart list $filter not found", 404);
+		}
+
+		return $this->getAllTracksPlaylist();
+	}
+
+	#[AmpacheAPI]
 	protected function playlist(int $filter, bool $include = false) : array {
 		$userId = $this->userId();
 		if ($filter == self::ALL_TRACKS_PLAYLIST_ID) {

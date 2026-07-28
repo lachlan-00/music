@@ -45,6 +45,9 @@ class AmpacheContext implements Context, SnippetAcceptingContext {
 		'live_streams'       => 'live_stream',
 		'live_stream'        => 'live_stream',
 		'live_stream_create' => 'live_stream',
+		'smartlists'         => 'playlist',
+		'smartlist'          => 'playlist',
+		'smartlist_songs'    => 'song',
 	];
 
 	/** @var array values picked from earlier responses, usable as ":name" in later parameters */
