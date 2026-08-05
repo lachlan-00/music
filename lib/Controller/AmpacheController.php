@@ -102,6 +102,7 @@ class AmpacheController extends ApiController {
 	public const API4_VERSION = '4.4.0';
 	public const API5_VERSION = '5.6.0';
 	public const API6_VERSION = '6.8.0';
+	public const API8_VERSION = '8.0.0';
 	public const API_MIN_COMPATIBLE_VERSION = '350001';
 
 	/**
@@ -443,7 +444,8 @@ class AmpacheController extends ApiController {
 			string $type, ?string $filter, ?string $add, ?string $update, int $limit, int $offset = 0, ?string $catalog = null) : array {
 		// The argument `catalog` narrows the children instead of addressing the parent. Both of our catalogs are
 		// synthetic and each entity type belongs to exactly one of them, so this filter either lets everything
-		// through or excludes everything.
+		// through or excludes everything. The original Ampache requires the argument on the API versions below 8
+		// but we have always tolerated its absence, and keep doing so to not break the existing clients.
 		$filterCatalogId = null;
 		if (!empty($catalog)) {
 			$filterCatalogId = self::resolveCatalogId($catalog);
@@ -476,6 +478,12 @@ class AmpacheController extends ApiController {
 						throw new AmpacheException("Filter '$filter' is not a valid catalog", 400);
 				}
 			} else {
+				// The original Ampache requires the parent to be named on these types. We have tolerated its
+				// absence before the API8 support was added, and keep doing so on the older versions.
+				if (empty($filter) && $this->apiMajorVersion() >= 8) {
+					throw new AmpacheException("Argument 'filter' is required for the type '$type'", 400);
+				}
+
 				$catalogId = StringUtil::startsWith($type, 'podcast') ? self::CATALOG_PODCASTS_ID : self::CATALOG_MUSIC_ID;
 				$parentId = empty($filter) ? null : (int)$filter;
 
@@ -2314,9 +2322,11 @@ class AmpacheController extends ApiController {
 			$ver = (int)$this->config->getSystemValue('music.ampache_api_default_ver', 6);
 		}
 
-		// For now, we have three supported major versions. Major version 3 can be sufficiently supported
-		// with our "version 4" implementation.
-		return (int)Util::limit($ver, 4, 6);
+		// Major version 3 can be sufficiently supported with our "version 4" implementation. There is no
+		// major version 7 in the Ampache protocol at all, the version following 6 is 8; a client asking
+		// for 7 is served with our version 6 implementation.
+		$ver = (int)Util::limit($ver, 4, 8);
+		return ($ver === 7) ? 6 : $ver;
 	}
 
 	private function apiVersionString() : string {
@@ -2324,6 +2334,7 @@ class AmpacheController extends ApiController {
 			case 4:		$ver = self::API4_VERSION; break;
 			case 5:		$ver = self::API5_VERSION; break;
 			case 6:		$ver = self::API6_VERSION; break;
+			case 8:		$ver = self::API8_VERSION; break;
 			default:	throw new AmpacheException('Unexpected api major version', 500);
 		}
 

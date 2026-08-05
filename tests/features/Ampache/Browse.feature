@@ -115,3 +115,19 @@ Feature: Ampache API - Browse
     And the JSON path "parent_id" should be the string "1"
     And the JSON path "browse.0.id" should be a string
     And the JSON path "browse.0.name" should be "Diablo Swing Orchestra"
+
+
+
+  Scenario: The parent is mandatory on API8
+    Given I am logged in with API version "8.0.0"
+    When I specify the parameter "type" with value "artist"
+    And I request the "browse" resource expecting an error
+    Then the error code should be "4710" of type "system"
+
+
+  Scenario: The parent is still optional on the older API versions
+    Given I am logged in with API version "6.6.0"
+    When I specify the parameter "type" with value "artist"
+    And I request the "browse" resource
+    Then the element "/root/child_type" should be "album"
+    And there should be 4 "/root/browse" elements
