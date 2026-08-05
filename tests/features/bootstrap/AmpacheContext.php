@@ -43,6 +43,7 @@ class AmpacheContext implements Context, SnippetAcceptingContext {
 		'catalogs'           => 'catalog',
 		'catalog'            => 'catalog',
 		'folders'            => 'folder',
+		'folders_flat'       => 'folder',
 		'browse'             => 'browse',
 		'live_streams'       => 'live_stream',
 		'live_stream'        => 'live_stream',

@@ -234,7 +234,7 @@ export class MusicWidget {
 	}
 
 	#showFolders() : void {
-		this.#ampacheLoadContent('folders', {}, (result: any) => {
+		this.#ampacheLoadContent('folders_flat', {}, (result: any) => {
 			this.#addFilterSelect(
 				result.folder,
 				t('music', 'Select folder'),

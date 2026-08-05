@@ -3,9 +3,9 @@ Feature: Ampache API - Folders
   As a user
   I need to be able to walk the folder tree of my music library
 
-  Note: the action `folders` means two different things depending on the API version. On API8, it is the
-  standard action browsing the folder tree one level at a time. On the older versions, it is our proprietary
-  flat listing of all the folders, which is covered by the last scenario here.
+  Note: `folders` is the standard action of API8, browsing the folder tree one level at a time. Our own flat
+  listing of all the folders used to carry this name and is now called `folders_flat`, covered by the last
+  scenarios here. Neither is restricted to a particular API version.
 
   Note: the folder IDs are those of the underlying file system nodes and differ between installations, so
   they are stored from an earlier response instead of being written out. The only fixed ID is the root, -1.
@@ -175,32 +175,24 @@ Feature: Ampache API - Folders
     And the JSON path "folder.items.0.parent" should be the string "-1"
 
 
-  Scenario: On the older API versions, the action is our proprietary flat listing
-    Given I am logged in with API version "6.6.0"
-    When I request the "folders" resource
+  Scenario: The proprietary flat listing is served under its own name
+    Given I am logged in with API version "8.0.0"
+    When I request the "folders_flat" resource
     Then I should get:
       | name  |
       | music |
 
 
-  Scenario: The proprietary flat listing is served also on the oldest API version
+  Scenario: The flat listing is served also on the oldest API version
     Given I am logged in with API version "4.4.0"
-    When I request the "folders" resource
+    When I request the "folders_flat" resource
     Then I should get:
       | name  |
       | music |
 
 
-  Scenario: The non-existent version 7 gets the implementation of the version 6
-    Given I am logged in with API version "7.0.0"
-    When I request the "folders" resource
-    Then I should get:
-      | name  |
-      | music |
-
-
-  Scenario: A version newer than the newest supported one gets the newest implementation
-    Given I am logged in with API version "9.9.9"
+  Scenario: The tree traversal is not restricted to API8 either
+    Given I am logged in with API version "6.6.0"
     When I request the "folders" resource
     Then the element "/root/folder/@id" should be "-1"
     And the element "/root/folder/items/item[1]/title" should be "music"

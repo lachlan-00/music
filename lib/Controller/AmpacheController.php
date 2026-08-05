@@ -118,19 +118,6 @@ class AmpacheController extends ApiController {
 	 */
 	private const DEPRECATED_ACTIONS = ['tag', 'tags', 'tag_albums', 'tag_artists', 'tag_songs'];
 
-	/**
-	 * Actions which cannot be served by a method simply named after the action, because the action means
-	 * different things on different API versions. The keys are the action names as they appear on the wire
-	 * and the values map the smallest applicable major API version to the name of the handling method; the
-	 * key 0 stands for "all versions below the next entry". The methods still need the attribute AmpacheAPI
-	 * to be callable, just like the actions resolved directly by their name.
-	 */
-	private const ACTION_METHOD_MAP = [
-		// Our proprietary flat listing of all the folders predates the action of the same name on API8,
-		// which browses the folder tree one level at a time and answers in an incompatible format.
-		'folders' => [0 => 'foldersLegacy', 8 => 'folders8'],
-	];
-
 	public function __construct(
 		string $appName,
 		IRequest $request,
@@ -243,9 +230,8 @@ class AmpacheController extends ApiController {
 		}
 
 		// Allow calling any functions annotated to be part of the API
-		$method = $this->methodForAction($action);
-		if (\method_exists($this, $method)) {
-			$reflection = new \ReflectionMethod($this, $method);
+		if (\method_exists($this, $action)) {
+			$reflection = new \ReflectionMethod($this, $action);
 			if (!empty($reflection->getAttributes(AmpacheAPI::class))) {
 				// custom "filter" which modifies the value of the request argument `limit`
 				$limitFilter = function (?string $value) : int {
@@ -268,7 +254,7 @@ class AmpacheController extends ApiController {
 				} catch (RequestParameterExtractorException $ex) {
 					throw new AmpacheException($ex->getMessage(), 400);
 				}
-				$response = \call_user_func_array([$this, $method], $parameterValues);
+				$response = \call_user_func_array([$this, $action], $parameterValues);
 				// The API methods may return either a Response object or an array, which should be converted to Response
 				if (!($response instanceof Response)) {
 					$response = $this->ampacheResponse($response);
@@ -761,11 +747,12 @@ class AmpacheController extends ApiController {
 	}
 
 	/**
-	 * This is a proprietary extension to the API, predating the standard action `folders` of API8. It is
-	 * reached by the action name `folders` on the API versions below 8, see ACTION_METHOD_MAP.
+	 * A flat listing of every folder in the library, which is a proprietary extension to the API. It used to
+	 * be called `folders` before API8 defined an action of that name, and was renamed to make room for it.
+	 * Only our own dashboard widget uses this, so there is no API promise to keep.
 	 */
 	#[AmpacheAPI]
-	protected function foldersLegacy(int $limit, int $offset = 0) : array {
+	protected function folders_flat(int $limit, int $offset = 0) : array {
 		$userId = $this->userId();
 		$musicFolder = $this->librarySettings->getFolder($userId);
 		$folders = $this->fileSystemService->findAllFolders($userId, $musicFolder);
@@ -786,12 +773,12 @@ class AmpacheController extends ApiController {
 
 	/**
 	 * Return the children of one folder of the music library, in a folder traversal style. This is the standard
-	 * action `folders` of API8; on the older versions, the action name is served by foldersLegacy instead.
+	 * action `folders` of API8; our own flat listing of all the folders is served by `folders_flat`.
 	 *
 	 * The arguments `cond` and `sort` of the original Ampache are not supported and are silently disregarded.
 	 */
 	#[AmpacheAPI]
-	protected function folders8(
+	protected function folders(
 			?string $filter, ?string $add, ?string $update, int $limit, int $offset = 0, bool $exact = true) : array {
 		$userId = $this->userId();
 		$musicFolder = $this->librarySettings->getFolder($userId);
@@ -2490,23 +2477,6 @@ class AmpacheController extends ApiController {
 		return ($this->session !== null)
 			? $this->session->getApiVersion()
 			: $this->request->getParam('version');
-	}
-
-	/**
-	 * Resolve the name of the method serving the given action on the requested API version. Nearly all the
-	 * actions are served by a method of the same name, and only those listed in ACTION_METHOD_MAP are not.
-	 */
-	private function methodForAction(string $action) : string {
-		$variants = self::ACTION_METHOD_MAP[$action] ?? null;
-		if ($variants === null) {
-			return $action;
-		}
-
-		$apiVersion = $this->apiMajorVersion();
-		$applicable = \array_filter($variants, fn ($minVersion) => $minVersion <= $apiVersion, ARRAY_FILTER_USE_KEY);
-		// an action with no variant for the requested version is not supported on it, and the action name is
-		// returned so that the caller ends up with the normal "action not supported" error
-		return empty($applicable) ? $action : $applicable[\max(\array_keys($applicable))];
 	}
 
 	private function apiMajorVersion() : int {
