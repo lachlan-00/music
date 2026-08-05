@@ -99,6 +99,12 @@ class AmpacheController extends ApiController {
 		self::CATALOG_PODCASTS_ID => ['name' => 'podcasts', 'gather_types' => 'podcast'],
 	];
 
+	/**
+	 * The root of the folder hierarchy of the action `folders`. The original Ampache uses this fixed ID for the
+	 * root, and we map it to the music folder of the user, whose true ID is accepted as a synonym.
+	 */
+	private const FOLDER_ROOT_ID = -1;
+
 	public const API4_VERSION = '4.4.0';
 	public const API5_VERSION = '5.6.0';
 	public const API6_VERSION = '6.8.0';
@@ -111,6 +117,19 @@ class AmpacheController extends ApiController {
 	 * API6. We keep serving them on API4, where they are still a valid part of the protocol.
 	 */
 	private const DEPRECATED_ACTIONS = ['tag', 'tags', 'tag_albums', 'tag_artists', 'tag_songs'];
+
+	/**
+	 * Actions which cannot be served by a method simply named after the action, because the action means
+	 * different things on different API versions. The keys are the action names as they appear on the wire
+	 * and the values map the smallest applicable major API version to the name of the handling method; the
+	 * key 0 stands for "all versions below the next entry". The methods still need the attribute AmpacheAPI
+	 * to be callable, just like the actions resolved directly by their name.
+	 */
+	private const ACTION_METHOD_MAP = [
+		// Our proprietary flat listing of all the folders predates the action of the same name on API8,
+		// which browses the folder tree one level at a time and answers in an incompatible format.
+		'folders' => [0 => 'foldersLegacy', 8 => 'folders8'],
+	];
 
 	public function __construct(
 		string $appName,
@@ -224,8 +243,9 @@ class AmpacheController extends ApiController {
 		}
 
 		// Allow calling any functions annotated to be part of the API
-		if (\method_exists($this, $action)) {
-			$reflection = new \ReflectionMethod($this, $action);
+		$method = $this->methodForAction($action);
+		if (\method_exists($this, $method)) {
+			$reflection = new \ReflectionMethod($this, $method);
 			if (!empty($reflection->getAttributes(AmpacheAPI::class))) {
 				// custom "filter" which modifies the value of the request argument `limit`
 				$limitFilter = function (?string $value) : int {
@@ -248,7 +268,7 @@ class AmpacheController extends ApiController {
 				} catch (RequestParameterExtractorException $ex) {
 					throw new AmpacheException($ex->getMessage(), 400);
 				}
-				$response = \call_user_func_array([$this, $action], $parameterValues);
+				$response = \call_user_func_array([$this, $method], $parameterValues);
 				// The API methods may return either a Response object or an array, which should be converted to Response
 				if (!($response instanceof Response)) {
 					$response = $this->ampacheResponse($response);
@@ -741,10 +761,11 @@ class AmpacheController extends ApiController {
 	}
 
 	/**
-	 * This is a proprietary extension to the API
+	 * This is a proprietary extension to the API, predating the standard action `folders` of API8. It is
+	 * reached by the action name `folders` on the API versions below 8, see ACTION_METHOD_MAP.
 	 */
 	#[AmpacheAPI]
-	protected function folders(int $limit, int $offset = 0) : array {
+	protected function foldersLegacy(int $limit, int $offset = 0) : array {
 		$userId = $this->userId();
 		$musicFolder = $this->librarySettings->getFolder($userId);
 		$folders = $this->fileSystemService->findAllFolders($userId, $musicFolder);
@@ -761,6 +782,70 @@ class AmpacheController extends ApiController {
 				'name' => $folder['name'],
 			], $folders)
 		];
+	}
+
+	/**
+	 * Return the children of one folder of the music library, in a folder traversal style. This is the standard
+	 * action `folders` of API8; on the older versions, the action name is served by foldersLegacy instead.
+	 *
+	 * The arguments `cond` and `sort` of the original Ampache are not supported and are silently disregarded.
+	 */
+	#[AmpacheAPI]
+	protected function folders8(
+			?string $filter, ?string $add, ?string $update, int $limit, int $offset = 0, bool $exact = true) : array {
+		$userId = $this->userId();
+		$musicFolder = $this->librarySettings->getFolder($userId);
+		$allFolders = $this->fileSystemService->findAllFolders($userId, $musicFolder, true);
+
+		$rootId = $musicFolder->getId();
+
+		$folder = self::resolveLibraryFolder($filter, $allFolders, $rootId, $exact);
+		if ($folder === null) {
+			throw new AmpacheException("Folder '$filter' not found", 404);
+		}
+		$folderId = $folder['id'];
+		$extFolderId = (string)self::externalFolderId($folderId, $rootId);
+		// the root of the library has no parent, and the null is preserved instead of being rendered as '0'
+		$extParentId = self::externalFolderId($folder['parent'], $rootId);
+		$extParentId = ($extParentId === null) ? null : (string)$extParentId;
+
+		[$addMin, $addMax, $updateMin, $updateMax] = self::parseTimeParameters($add, $update);
+
+		// The sub-folders have no insert or update times of their own, and the arguments `add` and `update`
+		// are hence applied only on the tracks. In practice, a new track is what makes a folder interesting.
+		$childFolders = \array_values(\array_filter($allFolders, fn ($f) => $f['parent'] === $folderId));
+		ArrayUtil::sortByColumn($childFolders, 'name');
+		$childTracks = $this->trackBusinessLayer->findAllByFolder(
+			$folderId, $userId, null, null, $addMin, $addMax, $updateMin, $updateMax);
+
+		$items = \array_merge(
+			\array_map(fn ($f) => self::renderFolderItem($f, $extFolderId), $childFolders),
+			$this->renderTrackItems($childTracks, $folder['path'], $extFolderId)
+		);
+
+		// the total count is reported before the paging is applied
+		$totalCount = \count($items);
+		$items = \array_slice($items, $offset, $limit);
+
+		$result = [
+			'total_count' => $totalCount,
+			'md5'         => \md5(\serialize(\array_map(fn ($i) => $i['object_type'] . '-' . $i['id'], $items))),
+			'folder'      => [
+				'id'      => $extFolderId,
+				'title'   => $folder['name'],
+				'parent'  => $extParentId,
+				'path'    => $folder['path'],
+				'catalog' => (string)self::CATALOG_MUSIC_ID,
+				'items'   => ['item' => $items]
+			]
+		];
+
+		// on the XML API, each item needs an element of its own, but the JSON API has a plain array
+		if ($this->jsonMode) {
+			$result['folder']['items'] = $items;
+		}
+
+		return $result;
 	}
 
 	/**
@@ -1980,6 +2065,97 @@ class AmpacheController extends ApiController {
 	}
 
 	/**
+	 * Resolve the folder targeted by the argument `filter` of the action `folders`. Following the original
+	 * Ampache, the filter is either the ID of the folder or its path name, and a filter consisting of digits
+	 * alone is taken as an ID. The root of the library is denoted by the path '/' or the ID -1, and it is
+	 * also reachable by its true ID. A path name is matched case-insensitively as a substring when the
+	 * argument `exact` is false.
+	 *
+	 * Only the folders belonging to the library of the user are searched, and a path pointing outside of it
+	 * is hence not found even if it would exist on the file system.
+	 *
+	 * @param array $allFolders Entries like {id: int, name: string, parent: ?int, path: string, trackIds: int[]}
+	 * @return ?array The matching entry of @a $allFolders, or null if there is none
+	 */
+	private static function resolveLibraryFolder(?string $filter, array $allFolders, int $rootId, bool $exact) : ?array {
+		$filter = ($filter === null || $filter === '') ? '/' : $filter;
+
+		// a filter made up of digits alone is an ID; a path name always carries its directory separators
+		if (\preg_match('/^-?\d+$/', $filter) === 1) {
+			$id = (int)$filter;
+			if ($id === self::FOLDER_ROOT_ID) {
+				$id = $rootId;
+			}
+			return ArrayUtil::find($allFolders, fn ($f) => $f['id'] === $id);
+		}
+
+		if ($filter === '/') {
+			return ArrayUtil::find($allFolders, fn ($f) => $f['id'] === $rootId);
+		}
+
+		// our paths begin with a slash and carry no trailing slash
+		$path = '/' . \trim($filter, '/');
+		return $exact
+			? ArrayUtil::find($allFolders, fn ($f) => $f['path'] === $path)
+			: ArrayUtil::find($allFolders, fn ($f) => \mb_stripos($f['path'], $path) !== false);
+	}
+
+	/**
+	 * The root folder of the library is presented with the fixed ID -1, like on the original Ampache, and not
+	 * with the ID of the underlying file system node. All the other folders use their true IDs.
+	 */
+	private static function externalFolderId(?int $folderId, int $rootId) : ?int {
+		if ($folderId === null) {
+			return null;
+		}
+		return ($folderId === $rootId) ? self::FOLDER_ROOT_ID : $folderId;
+	}
+
+	/**
+	 * @param array $folder Entry of the folder look-up-table
+	 */
+	private static function renderFolderItem(array $folder, string $parentId) : array {
+		return [
+			'id'            => (string)$folder['id'],
+			'object_type'   => 'folder',
+			'title'         => $folder['name'],
+			'parent'        => $parentId,
+			'path'          => $folder['path'],
+			'art'           => '',
+			'has_art'       => false,
+			'play_url'      => '', // a folder is not playable as such
+			'rating'        => 0,
+			'averagerating' => null
+		];
+	}
+
+	/**
+	 * Render tracks as items of the action `folders`. Note that this is a much leaner presentation than the
+	 * one of renderSongs, matching what the original Ampache returns for the children of a folder.
+	 * @param Track[] $tracks
+	 */
+	private function renderTrackItems(array $tracks, string $folderPath, string $parentId) : array {
+		$this->albumBusinessLayer->injectAlbumsToTracks($tracks, $this->userId());
+
+		return \array_map(function (Track $track) use ($folderPath, $parentId) {
+			$album = $track->getAlbum();
+			$hasArt = ($album !== null && $album->getCoverFileId() !== null);
+			return [
+				'id'            => (string)$track->getId(),
+				'object_type'   => 'song',
+				'title'         => $track->getFilename(),
+				'parent'        => $parentId,
+				'path'          => $folderPath,
+				'art'           => $hasArt ? $this->createCoverUrl($album) : '',
+				'has_art'       => $hasArt,
+				'play_url'      => $this->createAmpacheActionUrl('stream', $track->getId()),
+				'rating'        => $track->getRating(),
+				'averagerating' => null // we have no ratings from other users to average over
+			];
+		}, $tracks);
+	}
+
+	/**
 	 * Map an id or a name of one of our synthetic catalogs to the canonical catalog id. The names are accepted
 	 * because the action `browse` used them as ids before the catalog actions existed, and clients may have
 	 * stored those; they can be dropped once the next major version has been out for a while.
@@ -2007,6 +2183,10 @@ class AmpacheController extends ApiController {
 							$this->podcastEpisodeBusinessLayer->latestUpdateTime($userId));
 		}
 
+		// The original Ampache downloads the podcast episodes into the catalog directory, but we only store the
+		// channel and episode metadata parsed from the RSS feed and stream the audio from the publisher on demand.
+		// The type is still reported as 'local' because that's the only value which the clients handle generically
+		// and the catalog is served by this server; the empty path tells apart the podcasts from the music catalog.
 		return [
 			'id'             => (string)$catalogId,
 			'name'           => self::CATALOGS[$catalogId]['name'],
@@ -2310,6 +2490,23 @@ class AmpacheController extends ApiController {
 		return ($this->session !== null)
 			? $this->session->getApiVersion()
 			: $this->request->getParam('version');
+	}
+
+	/**
+	 * Resolve the name of the method serving the given action on the requested API version. Nearly all the
+	 * actions are served by a method of the same name, and only those listed in ACTION_METHOD_MAP are not.
+	 */
+	private function methodForAction(string $action) : string {
+		$variants = self::ACTION_METHOD_MAP[$action] ?? null;
+		if ($variants === null) {
+			return $action;
+		}
+
+		$apiVersion = $this->apiMajorVersion();
+		$applicable = \array_filter($variants, fn ($minVersion) => $minVersion <= $apiVersion, ARRAY_FILTER_USE_KEY);
+		// an action with no variant for the requested version is not supported on it, and the action name is
+		// returned so that the caller ends up with the normal "action not supported" error
+		return empty($applicable) ? $action : $applicable[\max(\array_keys($applicable))];
 	}
 
 	private function apiMajorVersion() : int {

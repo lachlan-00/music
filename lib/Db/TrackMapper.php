@@ -111,11 +111,24 @@ class TrackMapper extends BaseMapper {
 	}
 
 	/**
+	 * @param string|null $createdMin Optional minimum `created` timestamp.
+	 * @param string|null $createdMax Optional maximum `created` timestamp.
+	 * @param string|null $updatedMin Optional minimum `updated` timestamp.
+	 * @param string|null $updatedMax Optional maximum `updated` timestamp.
 	 * @return Track[]
 	 */
-	public function findAllByFolder(int $folderId, string $userId, ?int $limit = null, ?int $offset = null) : array {
-		$sql = $this->selectUserEntities('`file`.`parent` = ?', 'ORDER BY LOWER(`file`.`name`)');
+	public function findAllByFolder(int $folderId, string $userId, ?int $limit = null, ?int $offset = null,
+			?string $createdMin = null, ?string $createdMax = null, ?string $updatedMin = null, ?string $updatedMax = null) : array {
+		$condition = '`file`.`parent` = ?';
 		$params = [$userId, $folderId];
+
+		[$timestampConds, $timestampParams] = $this->formatTimestampConditions($createdMin, $createdMax, $updatedMin, $updatedMax);
+		if (!empty($timestampConds)) {
+			$condition .= ' AND ' . $timestampConds;
+			$params = \array_merge($params, $timestampParams);
+		}
+
+		$sql = $this->selectUserEntities($condition, 'ORDER BY LOWER(`file`.`name`)');
 		return $this->findEntities($sql, $params, $limit, $offset);
 	}
 

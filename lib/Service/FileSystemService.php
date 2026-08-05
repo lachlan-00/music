@@ -30,13 +30,22 @@ class FileSystemService {
 
 	/**
 	 * Returns all folders of the user containing indexed tracks, along with the contained track IDs
-	 * @return array of entries like {id: int, name: string, parent: ?int, trackIds: int[]}
+	 * @param bool $withPaths Include also the path of each folder. This is left out by default because it
+	 *                        is not needed by all the callers and the paths of a deep library are bulky.
+	 * @return array of entries like {id: int, name: string, parent: ?int, trackIds: int[], path?: string}
 	 */
-	public function findAllFolders(string $userId, Folder $musicFolder) : array {
+	public function findAllFolders(string $userId, Folder $musicFolder, bool $withPaths = false) : array {
 		// All tracks of the user, grouped by their parent folders. Some of the parent folders
 		// may be owned by other users and are invisible to this user (in case of shared files).
 		$trackIdsByFolder = $this->mapper->findTrackAndFolderIds($userId);
 		$foldersLut = $this->getFoldersLut($trackIdsByFolder, $userId, $musicFolder);
+
+		if ($withPaths) {
+			foreach (\array_keys($foldersLut) as $folderId) {
+				self::resolveFolderPath($folderId, $foldersLut);
+			}
+		}
+
 		return \array_map(
 			fn ($id, $folderInfo) => \array_merge($folderInfo, ['id' => $id]),
 			\array_keys($foldersLut), $foldersLut
@@ -53,23 +62,25 @@ class FileSystemService {
 
 		$foldersLut = $this->getFoldersLut($trackIdsByFolder, $userId, $musicFolder);
 
-		// recursive helper to get folder's path and cache all parent paths on the way
-		$getFolderPath = function (int $id, array &$foldersLut) use (&$getFolderPath) : string {
-			// setup the path if not cached already
-			if (!isset($foldersLut[$id]['path'])) {
-				$parentId = $foldersLut[$id]['parent'];
-				if ($parentId === null) {
-					$foldersLut[$id]['path'] = '';
-				} else {
-					$foldersLut[$id]['path'] = $getFolderPath($parentId, $foldersLut) . '/' . $foldersLut[$id]['name'];
-				}
-			}
-			return $foldersLut[$id]['path'];
-		};
-
 		foreach ($tracks as $track) {
-			$track->setFolderPath($getFolderPath($track->getFolderId(), $foldersLut));
+			$track->setFolderPath(self::resolveFolderPath($track->getFolderId(), $foldersLut));
 		}
+	}
+
+	/**
+	 * Get the path of a folder relative to the root of the music library, which has the empty path. The result
+	 * is cached into the LUT, along with the paths of all the predecessor folders resolved on the way.
+	 *
+	 * @param array $foldersLut (in|out) Keys are folder IDs and values are arrays like ['name' : string, 'parent' : ?int, ...]
+	 */
+	private static function resolveFolderPath(int $folderId, array &$foldersLut) : string {
+		if (!isset($foldersLut[$folderId]['path'])) {
+			$parentId = $foldersLut[$folderId]['parent'];
+			$foldersLut[$folderId]['path'] = ($parentId === null)
+				? ''
+				: self::resolveFolderPath($parentId, $foldersLut) . '/' . $foldersLut[$folderId]['name'];
+		}
+		return $foldersLut[$folderId]['path'];
 	}
 
 	/**

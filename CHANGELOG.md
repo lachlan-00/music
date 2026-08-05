@@ -3,6 +3,8 @@
 ### Added
 - Ampache API: Support for the major version 8, which behaves like the version 6 apart from requiring the parent to be named on the action `browse`
   * The protocol has no major version 7 at all; a client requesting it is served with our version 6 implementation, and a client requesting a version newer than 8 gets the version 8
+- Ampache API: The standard action `folders` of API8, which browses the folder tree of the library one level at a time, addressing the folders either by ID or by path name; the root of the library is the ID -1 or the path `/`
+  * On the API versions below 8, the action name `folders` keeps serving our proprietary flat listing of all the folders
 - Ampache API: Actions `catalogs` and `catalog`, presenting the library as the two synthetic catalogs `music` and `podcasts` which the action `browse` has always used
   [#144](https://github.com/nc-music/music/issues/144)
   * The action `browse` now identifies the catalogs by these IDs instead of by their names, and accepts the argument `catalog` to narrow the listed children. The names are still accepted wherever an ID is

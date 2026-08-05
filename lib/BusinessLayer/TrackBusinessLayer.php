@@ -80,11 +80,12 @@ class TrackBusinessLayer extends BusinessLayer implements IScrobbler {
 	}
 
 	/**
-	 * Returns all tracks filtered by parent folder
+	 * Returns all tracks filtered by parent folder, and optionally by the insert and update times
 	 * @return Track[]
 	 */
-	public function findAllByFolder(int $folderId, string $userId, ?int $limit = null, ?int $offset = null) : array {
-		return $this->mapper->findAllByFolder($folderId, $userId, $limit, $offset);
+	public function findAllByFolder(int $folderId, string $userId, ?int $limit = null, ?int $offset = null,
+			?string $createdMin = null, ?string $createdMax = null, ?string $updatedMin = null, ?string $updatedMax = null) : array {
+		return $this->mapper->findAllByFolder($folderId, $userId, $limit, $offset, $createdMin, $createdMax, $updatedMin, $updatedMax);
 	}
 
 	/**

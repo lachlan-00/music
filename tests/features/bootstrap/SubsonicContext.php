@@ -29,6 +29,8 @@ class SubsonicContext implements Context, SnippetAcceptingContext {
 	private $options = [];
 	/** @var array values stored to be passed to the next step(s) */
 	private $storedValues = [];
+	/** @var int HTTP status of the latest request made with the error-tolerating step */
+	private $errorStatus = 0;
 
 	private static function tableSize(TableNode $table) {
 		// getHash() doesn't return the header of the table
@@ -103,6 +105,68 @@ class SubsonicContext implements Context, SnippetAcceptingContext {
 	public function iRequestTheResource($resource) {
 		$this->xml = $this->client->request($resource, $this->options);
 		$this->resource = $resource;
+	}
+
+	/**
+	 * Unlike the plain request step, this one tolerates an error response, so that it can be asserted on
+	 * rather than aborting the scenario.
+	 *
+	 * @When I request the :resource resource expecting an error
+	 */
+	public function iRequestTheResourceExpectingAnError($resource) {
+		$result = $this->client->requestExpectingError($resource, $this->options);
+		$this->errorStatus = $result['status'];
+		$this->xml = $result['xml'];
+		$this->resource = $resource;
+	}
+
+	/**
+	 * @Then the response should not be an error
+	 */
+	public function theResponseShouldNotBeAnError() {
+		$rootElem = $this->xpath('/subsonic-response')[0];
+		if ((string)$rootElem['status'] !== 'ok') {
+			throw new \Exception('Unexpected error in the response' . PHP_EOL . $this->xml->asXML());
+		}
+	}
+
+	/**
+	 * The Subsonic protocol reports its errors within an otherwise ordinary 200 response, so this asserts
+	 * the transport rather than the error itself.
+	 *
+	 * @Then the response status should be :status
+	 */
+	public function theResponseStatusShouldBe($status) {
+		if ((int)$status !== $this->errorStatus) {
+			throw new \Exception("Expected HTTP status $status but got {$this->errorStatus}"
+								. PHP_EOL . $this->xml->asXML());
+		}
+	}
+
+	/**
+	 * @Then the error code should be :code with message :message
+	 */
+	public function theErrorCodeShouldBe($code, $message) {
+		$rootElem = $this->xpath('/subsonic-response')[0];
+		if ((string)$rootElem['status'] !== 'failed') {
+			throw new \Exception('The response is not an error' . PHP_EOL . $this->xml->asXML());
+		}
+
+		$errors = $this->xpath('/subsonic-response/error');
+		if (empty($errors)) {
+			throw new \Exception('No error element in the response' . PHP_EOL . $this->xml->asXML());
+		}
+
+		$actualCode = (string)$errors[0]['code'];
+		if ($actualCode !== $code) {
+			throw new \Exception("Expected error code $code but got '$actualCode'" . PHP_EOL . $this->xml->asXML());
+		}
+
+		$actualMessage = (string)$errors[0]['message'];
+		if ($actualMessage !== $message) {
+			throw new \Exception("Expected error message '$message' but got '$actualMessage'"
+								. PHP_EOL . $this->xml->asXML());
+		}
 	}
 
 	/**

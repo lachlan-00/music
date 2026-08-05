@@ -117,7 +117,6 @@ Feature: Ampache API - Browse
     And the JSON path "browse.0.name" should be "Diablo Swing Orchestra"
 
 
-
   Scenario: The parent is mandatory on API8
     Given I am logged in with API version "8.0.0"
     When I specify the parameter "type" with value "artist"

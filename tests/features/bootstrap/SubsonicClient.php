@@ -65,6 +65,28 @@ class SubsonicClient {
 	}
 
 	/**
+	 * Unlike the plain request, this one tolerates an error response so that it can be asserted on instead
+	 * of aborting the scenario. Note that the Subsonic protocol carries its errors in the body of an
+	 * otherwise ordinary 200 response; the HTTP status is returned so that this can be asserted as well.
+	 *
+	 * @param array<string, string> $queryParams
+	 * @return array{status: int, xml: \SimpleXMLElement}
+	 * @throws SubsonicClientException if the XML couldn't be parsed
+	 */
+	public function requestExpectingError(string $method, array $queryParams = []) : array {
+		$response = $this->doRequest($method, $queryParams, false);
+
+		try {
+			$xml = ClientUtil::getXml($response);
+			$xml->registerXPathNamespace('ss', 'http://subsonic.org/restapi');
+		} catch (Exception $e) {
+			throw new SubsonicClientException('Could not parse XML', 0, $e);
+		}
+
+		return ['status' => $response->getStatusCode(), 'xml' => $xml];
+	}
+
+	/**
 	 * requests the given Subsonic method in JSON format and returns the parsed JSON
 	 *
 	 * @param array<string, string> $queryParams
@@ -96,7 +118,7 @@ class SubsonicClient {
 		return $json;
 	}
 
-	private function doRequest(string $method, array $queryParams) : ResponseInterface {
+	private function doRequest(string $method, array $queryParams, bool $throwOnHttpError = true) : ResponseInterface {
 		$client = new Client(['verify' => false]);
 		return $client->get($this->baseUrl . $method, [
 			'query' => \array_merge([
@@ -104,7 +126,8 @@ class SubsonicClient {
 				'p' => $this->password,
 				'c' => 'BehatSubsonicClient',
 				'v' => '1.4'
-			], $queryParams)
+			], $queryParams),
+			'http_errors' => $throwOnHttpError
 		]);
 	}
 
