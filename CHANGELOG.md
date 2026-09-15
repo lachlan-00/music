@@ -1,6 +1,25 @@
 ## [Unreleased]
 
 ### Added
+
+### Changed
+
+### Fixed
+- Unhandled exception breaking the Music UI when operating within the Nextcloud Desktop Workspace
+  [#162](https://github.com/nc-music/music/issues/162)
+- Streaming of files on encrypted or other non-seekable storages: seek failures are no longer silently ignored, files with no known size are streamed without a declared length, and a failure to open the file is reported as HTTP 403 instead of 500
+  [#19](https://github.com/nc-music/music/issues/19)
+
+## 3.2.1 - 2026-08-31
+
+### Fixed
+- Administration settings view failing to load after update to Music v3.2.0
+  [#159](https://github.com/nc-music/music/issues/159)
+
+## 3.2.0 - 2026-08-30
+
+### Added
+- Support for Nextcloud 35 (tested on rc2)
 - Admin settings UI to setup Last.fm API key and secret without editing `config.php` manually
   [#131](https://github.com/nc-music/music/pull/131) @mattwellss
 - Possibility to configure the default volume with the config.php key `music.default_volume`
@@ -20,30 +39,71 @@
   * Track comment is stored to DB while scanning the library
   * The `comment` property is included in all song responses in the Subsonic and Ampache APIs
   * Advanced search can find tracks by comment
+- MBID support [#94](https://github.com/nc-music/music/issues/94), [#148](https://github.com/nc-music/music/issues/148)
+  * MusicBrainz IDs (Recording Id, Release Track Id, Release Id, Release Group Id, Artist Id, Release Artist Id) from file metadata are stored to DB when scanning the library
+  * Song/album/artist responses in the Subsonic API contain the `musicBrainzId` property and the responses in Ampache API contain the `mbid` property
+  * Advanced search can find tracks/albums/artists by the MBID values
+  * Distinct artists with identical names can be separated by MBID. Distinct album versions with the same name from the same artist can be separated by MBID.
+- Compilation field support [#127](https://github.com/nc-music/music/issues/127)
+  * The `compilation` metadata tag is stored to the DB when scanning the library
+  * Subsonic API: Include OpenSubsonic property `isCompilation` in the AlbumID3 responses
+- Partial support for replaygain [#63](https://github.com/nc-music/music/issues/63)
+  * The replaygain fields are saved to the DB while scanning and included in the song responses of the Ampache and Subsonic APIs
+  * The web UI player does *not* use the replaygain data
+- Record label support
+  * The record labels are scanned from the song metadata tag `publisher` and store in the DB
+  * Ampache API: Add actions `labels`, `label`, and `label_artists`. Include property `publisher` to the song responses.
+  * Subsonic API: Include property `recordLabels` on the album responses (OpenSubsonic addition)
+  * Advanced search can find tracks/albums/artists by the record label
+- Sample rate is scanned and included in the song responses of Ampache and Subsonic APIs. Advanced search can find songs by sample rate.
 - Context menu with the "Import from file" action on the "New Playlist" navigation item
   [#80 (comment)](https://github.com/nc-music/music/issues/80#issuecomment-3725231400)
+- Scan improvements:
+  * Provide controls for scanning and rescanning in the Settings view
+  * Enable aborting the ongoing scan operation on the UI
+  * Show in the Settings view if some tracks have been scanned on a less capable version of Music and offer to rescan them
+    + The same is shown by `occ music:scan`; these files can be scanned with the option `--rescan-old`
+- Ampache API:
+  * Actions `player` and `now_playing`, letting a client report its playback state and read it back. Unlike on the original Ampache server, the state is visible only to the user it belongs to
+    [#155](https://github.com/nc-music/music/pull/155) @lachlan-00
+  * Actions `catalogs` and `catalog`, presenting the library as the two synthetic catalogs `music` and `podcasts` which the action `browse` has always used
+    [#144](https://github.com/nc-music/music/issues/144) @lachlan-00
+    + The action `browse` renders its IDs as strings on the JSON API, matching the original Ampache server, and accepts the type `album_artist` as an alias of `artist`
+  * Play internet radio through the server, resolving any `.pls`/`.m3u` playlist URL and relaying the stream like the web UI already does. The relay can be disabled for the API clients alone with the config.php key `music.relay_radio_stream_on_api`.
+    [#88](https://github.com/nc-music/music/issues/88) @lachlan-00
+  * Play podcast streams through the server. The relay can be disabled for the API clients alone with the config.php key `music.relay_podcast_stream_on_api`.
 
 ### Changed
+- Ampache API: Reject the deprecated actions `tag`, `tags`, `tag_albums`, `tag_artists`, and `tag_songs` on API versions 5 and 6 like the original Ampache server does, answering with the error 4706 and, on version 6, the HTTP status 410. The actions still work on API version 4, and the renamed `genre` variants are unaffected
+  [#154](https://github.com/nc-music/music/pull/154) @lachlan-00
 - Show some error details in the browser console when subscribing a podcast channel fails
   [#132](https://github.com/nc-music/music/issues/132)
 - Avoid PostgreSQL logging tons of unique constraint violations on typical library scan
-  [owncloud/music#1135](https://github.com/nc-music/oc-music/issues/1135)
+  [oc-music#1135](https://github.com/nc-music/oc-music/issues/1135)
 - Show a confirmation dialog before removing the unavailable files from the library
   [#140](https://github.com/nc-music/music/pull/140) @sturlan
+- Do not automatically remove the unavailable files during the "rescan all"
 - Track details pane:
   * Collapse the more exotic tags by default and show them by clicking "Show more…"
   * Make all MusicBrainz Ids from the tags into links to the MusicBrainz site (like previously done with MbIds from Last.fm)
-  * On tag names, abbreviate "musicbrainz" as "mb" to not truncate the more important parts of the name
-  * Show also MusicBrainz Recording Id stored in id3v2.4 tag `UFID` (MusicBrainz Picard uses this on mp3 files)
+  * On tag names, abbreviate "musicbrainz" as "mb" and "replaygain" as "rg" to not truncate the more important parts of the name
+  * Show also the MusicBrainz Recording Id stored in id3v2.4 tag `UFID` (MusicBrainz Picard uses this on mp3 files)
   * Show all values of multi-valued metadata tags
 - Attempt to restart the playing radio stream if it abruptly ends
-  [nc-music#89](https://github.com/nc-music/music/issues/89)
+  [#89](https://github.com/nc-music/music/issues/89)
 - Improved web UI view switching performance for huge libraries
+- Playlist view remains lightning fast even on insanely large playlists
 - Extensive internal refactoring on the web UI
+- In absence of the `album artist` tag, if there are tracks with the same `album` name but differing `artist` name, treat those tracks as one album from "Various Artists"
+  [#45](https://github.com/nc-music/music/issues/45), [#55](https://github.com/nc-music/music/issues/55), [#98](https://github.com/nc-music/music/issues/98)
+  * Library has to be rescanned for this change to take effect
+  * To avoid merging albums with the same name, make sure the tracks have either `album artist` or `Music Brainz Release Id` metadata tag set
+- Drop obsolete column `disk` from the DB table `oc_music_albums` (the disk info was moved to `oc_music_tracks` in Music v0.13.1)
 
 ### Fixed
-- Streaming of files on encrypted or other non-seekable storages: seek failures are no longer silently ignored, files with no known size are streamed without a declared length, and a failure to open the file is reported as HTTP 403 instead of 500
-  [#19](https://github.com/nc-music/music/issues/19)
+- Vulnerability [GHSA-7xgc-f6j5-h394](https://github.com/nc-music/oc-music/security/advisories/GHSA-7xgc-f6j5-h394)
+- HTTP status 500 on all the Ampache, Subsonic, and web UI endpoints accessing the file system in case the configured music folder no longer exists; the APIs now return a proper protocol error instead
+  [#149](https://github.com/nc-music/music/pull/149) @lachlan-00
 - HTTP redirection not working (e.g. on radio streams) when the `Location` header contains a relative URL
 - Deprecation warnings printed on PHP 8.3+ while executing the Music background tasks
 - Web UI trying to load an invalid image URL upon page load
@@ -51,8 +111,13 @@
 - Empty lines being hidden when viewing time-synced lyrics
 - Collapsible navigation pane (used on narrow screens) misbehaving when song/album/etc. dragged sideways and dropped anywhere else than the navigation pane
 - Dashboard widget not stopping the playback when "Next" button pressed on the last track of the queue
-- Web UI failing to load on NC33 if `OCA.Theming` not ready in time (systematically on Safari, randomly on Firefox and Chrome)
+- Web UI failing to load on NC33 if `OCA.Theming` not ready in time (systematically on some systems, sporadically on others)
   [#146](https://github.com/nc-music/music/issues/146)
+- Alphabet navigation working wrong in the Internet radio view when some station is unnamed (such stations are now listed as last)
+- The embedded music player within Files being slightly misplaced on NC 34+
+- Performance problem on background cleanup task with huge libraries
+  [#157](https://github.com/nc-music/music/issues/157)
+- Album covers from Last.fm not showing up in the details pane since Last.fm changed the sub domain hosting the images
 - Subsonic API:
   * Attribute `parent` misplaced in the response of `getMusicDirectory` when browsing by file system folders
   * Endpoints `savePlayQueue` and `savePlayQueueByIndex` not allowing an empty list to clear the queue

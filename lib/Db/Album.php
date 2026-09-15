@@ -9,7 +9,7 @@
  * @author Morris Jobke <hey@morrisjobke.de>
  * @author Pauli Järvinen <pauli.jarvinen@gmail.com>
  * @copyright Morris Jobke 2013, 2014
- * @copyright Pauli Järvinen 2017 - 2025
+ * @copyright Pauli Järvinen 2017 - 2026
  */
 
 namespace OCA\Music\Db;
@@ -29,12 +29,16 @@ use OCP\IURLGenerator;
  * @method void setCoverFileId(?int $coverFileId)
  * @method int getAlbumArtistId()
  * @method void setAlbumArtistId(int $albumArtistId)
+ * @method bool getAlbumArtistUncertain()
+ * @method void setAlbumArtistUncertain(bool $albumArtistUncertain)
  * @method string getHash()
  * @method void setHash(string $hash)
  * @method ?string getStarred()
  * @method void setStarred(?string $timestamp)
  * @method int getRating()
  * @method void setRating(int $rating)
+ * @method bool getCompilation()
+ * @method void setCompilation(bool $compilation)
  * @method ?string getAlbumArtistName()
  */
 class Album extends Entity {
@@ -43,17 +47,20 @@ class Album extends Entity {
 	public ?string $mbidGroup = null;
 	public ?int $coverFileId = null;
 	public ?int $albumArtistId = null;
+	public ?bool $albumArtistUncertain = null;
 	public string $hash = '';
 	public ?string $starred = null;
 	public int $rating = 0;
+	public bool $compilation = false;
 	public ?string $albumArtistName = null; // not from music_albums table but still part of the standard content
-	public ?int $disk = 0; // deprecated
 
 	// extra fields injected separately by AlbumBusinessLayer
 	/** @var ?int[] $years */
 	private ?array $years = null;
 	/** @var ?Genre[] $genres - AlbumBusinessLayer injects *partial* Genre objects, not all properties are set */
 	private ?array $genres = null;
+	/** @var ?RecordLabel[] $recordLabels - AlbumBusinessLayer injects *partial* RecordLabel objects, not all properties are set */
+	private ?array $recordLabels = null;
 	/** @var ?Artist[] $artists */
 	private ?array $artists = null;
 	private ?int $numberOfDisks = null;
@@ -63,10 +70,11 @@ class Album extends Entity {
 	private ?array $tracks = null;
 
 	public function __construct() {
-		$this->addType('disk', 'int');
 		$this->addType('coverFileId', 'int');
 		$this->addType('albumArtistId', 'int');
+		$this->addType('albumArtistUncertain', 'bool');
 		$this->addType('rating', 'int');
+		$this->addType('compilation', 'bool');
 	}
 
 	/**
@@ -95,6 +103,20 @@ class Album extends Entity {
 	 */
 	public function setGenres(?array $genres) : void {
 		$this->genres = $genres;
+	}
+
+	/**
+	 * @return ?RecordLabel[]
+	 */
+	public function getRecordLabels() : ?array {
+		return $this->recordLabels;
+	}
+
+	/**
+	 * @param ?RecordLabel[] $labels
+	 */
+	public function setRecordLabels(?array $labels) : void {
+		$this->recordLabels = $labels;
 	}
 
 	/**

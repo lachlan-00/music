@@ -170,7 +170,7 @@ class SubsonicController extends ApiController {
 			if (!empty($reflection->getAttributes(SubsonicAPI::class))) {
 				$parameterExtractor = new RequestParameterExtractor($this->request);
 				try {
-					$parameterValues = $parameterExtractor->getParametersForMethod($this, $method);
+					$parameterValues = $parameterExtractor->getParametersForMethod($reflection);
 				} catch (RequestParameterExtractorException $ex) {
 					return $this->subsonicErrorResponse(10, $ex->getMessage());
 				}
@@ -698,7 +698,7 @@ class SubsonicController extends ApiController {
 	}
 
 	#[SubsonicAPI]
-	protected function scrobble(array $id, array $time, bool $submission = true) : array {
+	protected function scrobble(string $c, array $id, array $time, bool $submission = true) : array {
 		if (\count($id) === 0) {
 			throw new SubsonicException("Required parameter 'id' missing", 10);
 		}
@@ -747,9 +747,9 @@ class SubsonicController extends ApiController {
 					}
 
 					if ($submission) {
-						$this->scrobbler->recordTrackPlayed($tracksById[$trackId], $timeOfPlay);
+						$this->scrobbler->recordTrackPlayed($tracksById[$trackId], $timeOfPlay, $c);
 					} else {
-						$this->scrobbler->setNowPlaying($tracksById[$trackId], $timeOfPlay);
+						$this->scrobbler->setNowPlaying($tracksById[$trackId], $timeOfPlay, $c);
 					}
 				}
 			}
@@ -1102,6 +1102,7 @@ class SubsonicController extends ApiController {
 				$apiTrack['username'] = $this->user();
 				$apiTrack['minutesAgo'] = (int)(($now->getTimestamp() - $nowPlaying['timeOfPlay']) / 60);
 				$apiTrack['playerId'] = 0; // dummy
+				$apiTrack['playerName'] = $nowPlaying['client'];
 				$apiTracks[] = $apiTrack;
 			}
 		} catch (BusinessLayerException $e) {
@@ -1401,6 +1402,7 @@ class SubsonicController extends ApiController {
 			'sortName'      => $this->nameWithoutArticle($artist->getName()) ?? '', // OpenSubsonic
 			'mediaType'     => 'artist', // OpenSubsonic, only specified for the "old" API but we don't separate the APIs here
 			'roles'         => $artist->getRoles(), // OpenSubsonic
+			'musicBrainzId' => $artist->getMbid(), // OpenSubsonic
 		];
 
 		if (!empty($artist->getCoverFileId())) {
@@ -1435,6 +1437,8 @@ class SubsonicController extends ApiController {
 		$result['name'] = $album->getNameString($this->l10n);
 		$result['songCount'] = $this->trackBusinessLayer->countByAlbum($album->getId());
 		$result['duration'] = $this->trackBusinessLayer->totalDurationOfAlbum($album->getId());
+		$result['isCompilation'] = $album->getCompilation(); // OpenSubsonic
+		$result['recordLabels'] = \array_map(fn ($label) => ['name' => $label->getName()], $album->getRecordLabels() ?? []); // OpenSubsonic
 
 		return $result;
 	}
@@ -1457,6 +1461,7 @@ class SubsonicController extends ApiController {
 			'genre'         => \implode(', ', $genres) ?: null,
 			'genres'        => \array_map(fn ($name) => ['name' => $name], $genres), // OpenSubsonic
 			'sortName'      => $this->nameWithoutArticle($album->getName()) ?? '', // OpenSubsonic
+			'musicBrainzId' => $album->getMbid(), // OpenSubsonic
 		];
 	}
 

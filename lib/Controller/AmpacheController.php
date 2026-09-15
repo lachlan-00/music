@@ -28,6 +28,7 @@ use OCA\Music\BusinessLayer\PlaylistBusinessLayer;
 use OCA\Music\BusinessLayer\PodcastChannelBusinessLayer;
 use OCA\Music\BusinessLayer\PodcastEpisodeBusinessLayer;
 use OCA\Music\BusinessLayer\RadioStationBusinessLayer;
+use OCA\Music\BusinessLayer\RecordLabelBusinessLayer;
 use OCA\Music\BusinessLayer\TrackBusinessLayer;
 use OCA\Music\Db\Album;
 use OCA\Music\Db\AmpacheSession;
@@ -40,6 +41,7 @@ use OCA\Music\Db\Playlist;
 use OCA\Music\Db\PodcastChannel;
 use OCA\Music\Db\PodcastEpisode;
 use OCA\Music\Db\RadioStation;
+use OCA\Music\Db\RecordLabel;
 use OCA\Music\Db\SortBy;
 use OCA\Music\Db\Track;
 use OCA\Music\Http\Attribute\AmpacheAPI;
@@ -58,7 +60,9 @@ use OCA\Music\Service\FileSystemService;
 use OCA\Music\Service\LastfmService;
 use OCA\Music\Service\LibrarySettings;
 use OCA\Music\Service\PodcastService;
+use OCA\Music\Service\RadioService;
 use OCA\Music\Service\Scrobbling\IScrobbler;
+use OCA\Music\Service\StreamTokenService;
 use OCA\Music\Utility\AppInfo;
 use OCA\Music\Utility\ArrayUtil;
 use OCA\Music\Utility\Random;
@@ -86,10 +90,30 @@ class AmpacheController extends ApiController {
 	private array $namePrefixes;
 
 	public const ALL_TRACKS_PLAYLIST_ID = -1;
+
+	/**
+	 * The app has no catalog concept of its own but the Ampache API requires one, and clients like Amperfy
+	 * use it as the entry point of their directory browsing. The library is therefore presented as two fixed
+	 * synthetic catalogs, matching the split which the action `browse` has always used on its root level.
+	 */
+	public const CATALOG_MUSIC_ID = 'music';
+	public const CATALOG_PODCASTS_ID = 'podcasts';
+	private const CATALOGS = [
+		self::CATALOG_MUSIC_ID    => ['name' => 'Music',    'gather_types' => 'music'],
+		self::CATALOG_PODCASTS_ID => ['name' => 'Podcasts', 'gather_types' => 'podcast'],
+	];
+
 	public const API4_VERSION = '4.4.0';
 	public const API5_VERSION = '5.6.0';
 	public const API6_VERSION = '6.8.0';
 	public const API_MIN_COMPATIBLE_VERSION = '350001';
+
+	/**
+	 * The pre-rename spelling of the genre actions. The original Ampache server dropped these from its
+	 * method list on API5 and answers them with the error 4706 there, adding also the HTTP status 410 on
+	 * API6. We keep serving them on API4, where they are still a valid part of the protocol.
+	 */
+	private const DEPRECATED_ACTIONS = ['tag', 'tags', 'tag_albums', 'tag_artists', 'tag_songs'];
 
 	public function __construct(
 		string $appName,
@@ -106,6 +130,7 @@ class AmpacheController extends ApiController {
 		private PodcastChannelBusinessLayer $podcastChannelBusinessLayer,
 		private PodcastEpisodeBusinessLayer $podcastEpisodeBusinessLayer,
 		private RadioStationBusinessLayer $radioStationBusinessLayer,
+		private RecordLabelBusinessLayer $recordLabelBusinessLayer,
 		private TrackBusinessLayer $trackBusinessLayer,
 		private Library $library,
 		private PodcastService $podcastService,
@@ -116,6 +141,8 @@ class AmpacheController extends ApiController {
 		private FileSystemService $fileSystemService,
 		private LastfmService $lastfmService,
 		private LibrarySettings $librarySettings,
+		private RadioService $radioService,
+		private StreamTokenService $streamTokenService,
 		private Random $random,
 		private Logger $logger,
 		private IScrobbler $scrobbler,
@@ -144,7 +171,7 @@ class AmpacheController extends ApiController {
 		}
 	}
 
-	public function ampacheErrorResponse(int $code, string $message) : Response {
+	public function ampacheErrorResponse(int $code, string $message, string $errorType = 'system') : Response {
 		$this->logger->debug($message);
 
 		if ($this->apiMajorVersion() > 4) {
@@ -153,7 +180,7 @@ class AmpacheController extends ApiController {
 				'error' => [
 					'errorCode'    => (string)$code,
 					'errorAction'  => $this->request->getParam('action'),
-					'errorType'    => 'system',
+					'errorType'    => $errorType,
 					'errorMessage' => $message
 				]
 			];
@@ -198,6 +225,10 @@ class AmpacheController extends ApiController {
 	protected function dispatch(string $action) : Response {
 		$this->logger->debug("Ampache action '$action' requested");
 
+		if (\in_array($action, self::DEPRECATED_ACTIONS) && $this->apiMajorVersion() > 4) {
+			return $this->deprecatedActionResponse($action);
+		}
+
 		// Allow calling any functions annotated to be part of the API
 		if (\method_exists($this, $action)) {
 			$reflection = new \ReflectionMethod($this, $action);
@@ -219,7 +250,7 @@ class AmpacheController extends ApiController {
 
 				$parameterExtractor = new RequestParameterExtractor($this->request, ['limit' => $limitFilter]);
 				try {
-					$parameterValues = $parameterExtractor->getParametersForMethod($this, $action);
+					$parameterValues = $parameterExtractor->getParametersForMethod($reflection);
 				} catch (RequestParameterExtractorException $ex) {
 					throw new AmpacheException($ex->getMessage(), 400);
 				}
@@ -235,6 +266,21 @@ class AmpacheController extends ApiController {
 		// No method was found for this action
 		$this->logger->warning("Unsupported Ampache action '$action' requested");
 		throw new AmpacheException('Action not supported', 405);
+	}
+
+	/**
+	 * Reject one of the actions removed from the protocol after API4, matching how the original Ampache
+	 * server answers them. Only API6 carries the HTTP status; on API5 the error travels in the body of an
+	 * otherwise ordinary 200 response.
+	 */
+	private function deprecatedActionResponse(string $action) : Response {
+		$this->logger->debug("Deprecated Ampache action '$action' requested, use the 'genre' variant instead");
+
+		$response = $this->ampacheErrorResponse(410, 'Deprecated', 'removed');
+		if ($this->apiMajorVersion() > 5) {
+			$response->setStatus(Http::STATUS_GONE);
+		}
+		return $response;
 	}
 
 	/***********************
@@ -272,10 +318,10 @@ class AmpacheController extends ApiController {
 			'live_streams'        => $this->radioStationBusinessLayer->count($user),
 			$genresKey            => $this->genreBusinessLayer->count($user),
 			'videos'              => 0,
-			'catalogs'            => 0,
+			'catalogs'            => \count(self::CATALOGS),
 			'shares'              => 0,
 			'licenses'            => 0,
-			'labels'              => 0,
+			'labels'              => $this->recordLabelBusinessLayer->count($user),
 			'max_song'            => $this->trackBusinessLayer->maxId($user),
 			'max_album'           => $this->albumBusinessLayer->maxId($user),
 			'max_artist'          => $this->artistBusinessLayer->maxId($user),
@@ -400,39 +446,51 @@ class AmpacheController extends ApiController {
 	}
 
 	#[AmpacheAPI]
-	protected function browse(string $type, ?string $filter, ?string $add, ?string $update, int $limit, int $offset = 0) : array {
-		// note: the argument 'catalog' is disregarded in our implementation
+	protected function browse(
+			string $type, ?string $filter, ?string $add, ?string $update, int $limit, int $offset = 0, ?string $catalog = null) : array {
+		// The argument `catalog` narrows the children instead of addressing the parent. Both of our catalogs are
+		// synthetic and each entity type belongs to exactly one of them, so this filter either lets everything
+		// through or excludes everything.
+		if (!empty($catalog) && !\array_key_exists($catalog, self::CATALOGS)) {
+			throw new AmpacheException("Catalog '$catalog' not found", 404);
+		}
+
 		if ($type == 'root') {
 			$catalogId = null;
 			$childType = 'catalog';
-			$children = [
-				['id' => 'music', 'name' => 'music'],
-				['id' => 'podcasts', 'name' => 'podcasts']
-			];
+			$children = \array_map(
+				fn ($id, $catalogDetails) => ['id' => $id, 'name' => $this->l10n->t($catalogDetails['name'])],
+				\array_keys(self::CATALOGS), self::CATALOGS
+			);
 		} else {
 			if ($type == 'catalog') {
-				$catalogId = null;
+				// the catalog may be addressed with the argument `catalog` when there is no `filter`
+				$catalogId = empty($filter) ? $catalog : $filter;
 				$parentId = null;
 
-				switch ($filter) {
-					case 'music':
+				switch ($catalogId) {
+					case self::CATALOG_MUSIC_ID:
 						$childType = 'artist';
 						break;
-					case 'podcasts':
+					case self::CATALOG_PODCASTS_ID:
 						$childType = 'podcast';
 						break;
 					default:
-						throw new AmpacheException("Filter '$filter' is not a valid catalog", 400);
+						throw new AmpacheException("Filter '$catalogId' is not a valid catalog", 400);
 				}
 			} else {
-				$catalogId = StringUtil::startsWith($type, 'podcast') ? 'podcasts' : 'music';
+				$catalogId = StringUtil::startsWith($type, 'podcast') ? self::CATALOG_PODCASTS_ID : self::CATALOG_MUSIC_ID;
 				$parentId = empty($filter) ? null : (int)$filter;
 
 				switch ($type) {
 					case 'podcast':
 						$childType = 'podcast_episode';
 						break;
+					// The original Ampache browses a music catalog with the type `album_artist` while still
+					// reporting the child type as `artist`. We list the artists having albums in any case,
+					// so the two types are equivalent for us.
 					case 'artist':
+					case 'album_artist':
 						$childType = 'album';
 						break;
 					case 'album':
@@ -443,19 +501,54 @@ class AmpacheController extends ApiController {
 				}
 			}
 
-			$businessLayer = $this->getBusinessLayer($childType);
-			[$addMin, $addMax, $updateMin, $updateMax] = self::parseTimeParameters($add, $update);
-			$children = $businessLayer->findAllIdsAndNames(
-				$this->userId(), $this->l10n, $parentId, $limit, $offset, $addMin, $addMax, $updateMin, $updateMax, true);
+			// Each of our entity types belongs to exactly one of the synthetic catalogs, so a request for the
+			// other catalog has nothing to return.
+			if ($catalog !== null && $type != 'catalog' && $catalog !== $catalogId) {
+				$children = [];
+			} else {
+				$businessLayer = $this->getBusinessLayer($childType);
+				[$addMin, $addMax, $updateMin, $updateMax] = self::parseTimeParameters($add, $update);
+				$children = $businessLayer->findAllIdsAndNames(
+					$this->userId(), $this->l10n, $parentId, $limit, $offset, $addMin, $addMax, $updateMin, $updateMax, true);
+			}
 		}
 
+		// The original Ampache renders all these IDs as strings, which is visible on the JSON API. A null is
+		// rendered as an empty string, matching its `(string)` casts.
 		return [
-			'catalog_id'  => $catalogId,
-			'parent_id'   => $filter,
+			'catalog_id'  => (string)$catalogId,
+			'parent_id'   => (string)$filter,
 			'parent_type' => $type,
 			'child_type'  => $childType,
-			'browse'      => \array_map(fn ($idAndName) => $idAndName + $this->prefixAndBaseName($idAndName['name']), $children)
+			'browse'      => \array_map(
+				fn ($idAndName) => ['id' => (string)$idAndName['id'], 'name' => $idAndName['name']]
+							+ $this->prefixAndBaseName($idAndName['name']),
+				$children)
 		];
+	}
+
+	#[AmpacheAPI]
+	protected function catalogs(?string $filter, int $limit, int $offset = 0) : array {
+		$catalogIds = \array_keys(self::CATALOGS);
+
+		// On the original Ampache server, the filter of this action selects by gather type, not by name
+		if (!empty($filter)) {
+			$catalogIds = \array_values(\array_filter(
+				$catalogIds, fn ($id) => self::CATALOGS[$id]['gather_types'] === $filter));
+		}
+
+		$catalogIds = \array_slice($catalogIds, $offset, $limit);
+
+		return ['catalog' => \array_map(fn ($id) => $this->renderCatalog($id), $catalogIds)];
+	}
+
+	#[AmpacheAPI]
+	protected function catalog(string $filter) : array {
+		if (!\array_key_exists($filter, self::CATALOGS)) {
+			throw new AmpacheException("Catalog $filter not found", 404);
+		}
+
+		return ['catalog' => [$this->renderCatalog($filter)]];
 	}
 
 	#[AmpacheAPI]
@@ -1121,6 +1214,24 @@ class AmpacheController extends ApiController {
 	}
 
 	#[AmpacheAPI]
+	protected function labels(?string $filter, int $limit, int $offset = 0, bool $exact = false) : array {
+		$labels = $this->findEntities($this->recordLabelBusinessLayer, $filter, $exact, $limit, $offset);
+		return $this->renderRecordLabels($labels);
+	}
+
+	#[AmpacheAPI]
+	protected function label(int $filter) : array {
+		$label = $this->recordLabelBusinessLayer->find($filter, $this->userId());
+		return $this->renderRecordLabels([$label]);
+	}
+
+	#[AmpacheAPI]
+	protected function label_artists(int $filter, int $limit, int $offset = 0) : array {
+		$artists = $this->artistBusinessLayer->findAllByRecordLabel($filter, $this->userId(), $limit, $offset);
+		return $this->renderArtists($artists);
+	}
+
+	#[AmpacheAPI]
 	protected function bookmarks(int $include = 0) : array {
 		$bookmarks = $this->bookmarkBusinessLayer->findAll($this->userId());
 		return $this->renderBookmarks($bookmarks, $include);
@@ -1281,6 +1392,91 @@ class AmpacheController extends ApiController {
 		return ['success' => 'play recorded'];
 	}
 
+	/**
+	 * How long a track of unknown length is reported as playing by the action `now_playing`. Only the media
+	 * scanned without a duration and the live streams end up needing this.
+	 */
+	private const NOW_PLAYING_FALLBACK_DURATION = 300;
+
+	/**
+	 * Report the playback state of the client. The state is stored in the same place where the web UI and the
+	 * Subsonic API keep theirs, so that whatever the user plays is visible through all of them.
+	 *
+	 * Only the type `song` is supported: the shared "now playing" state of this app is track-based, and the
+	 * podcast episodes of this app are not tracks. The type `video` has no counterpart here at all.
+	 */
+	#[AmpacheAPI]
+	protected function player(int $filter, string $type = 'song', string $state = 'play', ?int $time = null, ?string $client = null) : array {
+		$type = \mb_strtolower($type);
+		$state = \mb_strtolower($state);
+
+		if ($type !== 'song') {
+			throw new AmpacheException("Unsupported type '$type'", 400);
+		}
+		if (!\in_array($state, ['play', 'stop'])) {
+			throw new AmpacheException("Invalid state '$state'", 400);
+		}
+
+		if ($state === 'play') {
+			$track = $this->trackBusinessLayer->find($filter, $this->userId());
+			// The argument `time` is the elapsed play time, and the play has hence started that many seconds
+			// ago. Anchoring the timestamp on the start keeps the expiry time below correct.
+			$position = \max($time ?? 0, 0);
+			$timeOfPlay = new \DateTime('@' . (\time() - $position));
+
+			// This reaches the external scrobbling services and the shared "now playing" state alike, as the
+			// TrackBusinessLayer is registered as one of the scrobblers.
+			$this->scrobbler->setNowPlaying($track, $timeOfPlay, $client);
+		} else {
+			$this->trackBusinessLayer->clearNowPlaying($this->userId());
+		}
+
+		return $this->now_playing();
+	}
+
+	/**
+	 * Note: The original Ampache server reports what every user of the instance is playing, but we return only
+	 * the data of the requesting user. Publishing one user's activity to the others would need an opt-in setting
+	 * of its own, and the same call of the Subsonic API is limited in the same way for the same reason.
+	 */
+	#[AmpacheAPI]
+	protected function now_playing() : array {
+		$userId = $this->userId();
+
+		try {
+			$nowPlaying = $this->trackBusinessLayer->getNowPlaying($userId);
+		} catch (BusinessLayerException $e) {
+			// malformed data or a track which no longer exists; nothing is playing as far as we are concerned
+			$this->logger->warning($e->getMessage());
+			$nowPlaying = null;
+		}
+
+		if ($nowPlaying === null) {
+			return ['now_playing' => []];
+		}
+
+		$track = $nowPlaying['track'];
+		// Like on the original Ampache server, the entry expires by itself when the track would have played to
+		// its end, so that a client which stops without telling us leaves nothing behind. The state itself is
+		// left in place, as it is shared with the Subsonic API which reports it regardless of its age.
+		// A track of unknown length would expire immediately, and gets the fallback window instead.
+		$expire = $nowPlaying['timeOfPlay'] + ($track->getLength() ?: self::NOW_PLAYING_FALLBACK_DURATION);
+		if ($expire <= \time()) {
+			return ['now_playing' => []];
+		}
+
+		return ['now_playing' => [[
+			'id'     => (string)$track->getId(),
+			'type'   => 'song',
+			'client' => $nowPlaying['client'] ?? 'api',
+			'expire' => $expire,
+			'user'   => [
+				'id'       => $userId,
+				'username' => $userId
+			]
+		]]];
+	}
+
 	#[AmpacheAPI]
 	protected function scrobble(string $song, string $artist, string $album, ?int $date) : array {
 		// arguments songmbid, artistmbid, and albummbid not supported for now
@@ -1373,10 +1569,38 @@ class AmpacheController extends ApiController {
 				$streamUrl = $episode->getStreamUrl();
 				if ($streamUrl === null) {
 					return new ErrorResponse(Http::STATUS_NOT_FOUND, "The podcast episode $id has no stream URL");
-				} elseif ($this->isInternalSession() && $this->config->getSystemValue('music.relay_podcast_stream', true)) {
+				} elseif ($this->podcastRelayEnabled()) {
 					return new RelayStreamResponse($streamUrl);
 				} else {
 					return new RedirectResponse($streamUrl);
+				}
+			} elseif ($type === 'live_stream') {
+				$station = $this->radioStationBusinessLayer->find($id, $userId);
+				$resolved = $this->radioService->resolveStreamUrl($station->getStreamUrl());
+
+				if ($resolved['url'] === null) {
+					return new ErrorResponse(Http::STATUS_NOT_FOUND, "Failed to resolve the stream URL of the live stream $id");
+				} elseif ($this->radioRelayEnabled()) {
+					if (!$resolved['hls']) {
+						// Relay a non-HLS stream
+						return new RelayStreamResponse($resolved['url']);
+					} else if ($this->config->getSystemValue('music.enable_radio_hls', true)) {
+						// Relay a HLS stream.
+						// The manifest has to be rewritten so that the segments are also fetched through us, and that
+						// happens on a token-authenticated public route which is shared with the web UI.
+						$token = $this->streamTokenService->tokenForUrl($resolved['url']);
+						return new RedirectResponse($this->urlGenerator->linkToRouteAbsolute('music.radioApi.hlsManifest', [
+							'url'	=> \rawurlencode($resolved['url']),
+							'token'	=> \rawurlencode($token)
+						]));
+					} else {
+						// HLS stream while the HLS-relaying is disabled. Redirect to the resolved URL without relaying.
+						return new RedirectResponse($resolved['url']);
+					}
+				} else {
+					// Even without relaying, the client benefits from the redirect resolution done above, which
+					// unwraps any .pls/.m3u playlist and follows the redirections of the original URL.
+					return new RedirectResponse($resolved['url']);
 				}
 			} elseif ($type === 'playlist') {
 				$songIds = ($id === self::ALL_TRACKS_PLAYLIST_ID)
@@ -1725,6 +1949,7 @@ class AmpacheController extends ApiController {
 					'rating'        => $artist->getRating(),
 					'preciserating' => $artist->getRating(),
 					'flag'          => !empty($artist->getStarred()),
+					'mbid'          => $artist->getMbid(),
 					$genreKey       => \array_map(fn ($genreId) => [
 						'id'    => (string)$genreId,
 						'text'  => $genreMap[$genreId]->getNameString($this->l10n),
@@ -1785,6 +2010,8 @@ class AmpacheController extends ApiController {
 					'art'           => $this->createCoverUrl($album),
 					'has_art'       => $album->getCoverFileId() !== null,
 					'flag'          => !empty($album->getStarred()),
+					'mbid'          => $album->getMbid(),
+					'mbid_group'    => $album->getMbidGroup(),
 					$genreKey       => \array_map(fn ($genre) => [
 						'id'    => (string)$genre->getId(),
 						'text'  => $genre->getNameString($this->l10n),
@@ -1877,15 +2104,70 @@ class AmpacheController extends ApiController {
 		];
 	}
 
+	private function renderCatalog(string $catalogId) : array {
+		$userId = $this->userId();
+		$isMusic = ($catalogId === self::CATALOG_MUSIC_ID);
+
+		if ($isMusic) {
+			$addTime = $this->library->latestInsertTime($userId);
+			$updateTime = $this->library->latestUpdateTime($userId);
+		} else {
+			$addTime = \max($this->podcastChannelBusinessLayer->latestInsertTime($userId),
+							$this->podcastEpisodeBusinessLayer->latestInsertTime($userId));
+			$updateTime = \max($this->podcastChannelBusinessLayer->latestUpdateTime($userId),
+							$this->podcastEpisodeBusinessLayer->latestUpdateTime($userId));
+		}
+
+		return [
+			'id'             => $catalogId,
+			'name'           => $this->l10n->t(self::CATALOGS[$catalogId]['name']),
+			'type'           => 'local',
+			'gather_types'   => self::CATALOGS[$catalogId]['gather_types'],
+			'enabled'        => true,
+			'last_add'       => $addTime->getTimestamp(),
+			'last_clean'     => \time(), // we don't track the time of the latest removal, see also the action `handshake`
+			'last_update'    => $updateTime->getTimestamp(),
+			'path'           => $isMusic ? $this->librarySettings->getPath($userId) : '',
+			'rename_pattern' => '',
+			'sort_pattern'   => ''
+		];
+	}
+
 	/**
 	 * @param RadioStation[] $stations
 	 */
 	private function renderLiveStreams(array $stations) : array {
 		$createImageUrl = fn (RadioStation $station) => $this->createAmpacheActionUrl('get_art', $station->getId(), 'live_stream');
 
+		// Route the playback through our own stream action like we do for songs and podcast episodes, so that the
+		// stream URL gets resolved (and optionally relayed) by the server instead of being played directly.
+		$createStreamUrl = fn (RadioStation $station) => $this->createAmpacheActionUrl('stream', $station->getId(), 'live_stream');
+
 		return [
-			'live_stream' => \array_map(fn ($s) => $s->toAmpacheApi($createImageUrl), $stations)
+			'live_stream' => \array_map(fn ($s) => $s->toAmpacheApi($createImageUrl, $createStreamUrl), $stations)
 		];
+	}
+
+	/**
+	 * Relaying the radio streams to the API clients is a separate decision from relaying them to the web UI,
+	 * as the API clients are not bound by the content security policy which is the main reason for the relay.
+	 */
+	private function radioRelayEnabled() : bool {
+		$enabled = (bool)$this->config->getSystemValue('music.relay_radio_stream', true);
+		return $this->isInternalSession()
+			? $enabled
+			: (bool)$this->config->getSystemValue('music.relay_radio_stream_on_api', $enabled);
+	}
+
+	/**
+	 * Relaying the podcasts to the API clients is a separate decision from relaying them to the web UI,
+	 * as the API clients are not bound by the content security policy which is the main reason for the relay.
+	 */
+	private function podcastRelayEnabled() : bool {
+		$enabled = (bool)$this->config->getSystemValue('music.relay_podcast_stream', true);
+		return $this->isInternalSession()
+			? $enabled
+			: (bool)$this->config->getSystemValue('music.relay_podcast_stream_on_api', $enabled);
 	}
 
 	/**
@@ -1903,6 +2185,15 @@ class AmpacheController extends ApiController {
 	private function renderGenres(array $genres) : array {
 		return [
 			'genre' => \array_map(fn ($g) => $g->toAmpacheApi($this->l10n), $genres)
+		];
+	}
+
+	/**
+	 * @param RecordLabel[] $labels
+	 */
+	private function renderRecordLabels(array $labels) : array {
+		return [
+			'label' => \array_map(fn ($l) => $l->toAmpacheApi(), $labels)
 		];
 	}
 
@@ -2093,7 +2384,7 @@ class AmpacheController extends ApiController {
 			// For singular actions (like "song", "artist"), the root object contains directly the entity properties.
 			else {
 				$action = $this->request->getParam('action');
-				$plural = (\substr($action, -1) === 's' || \in_array($action, ['get_similar', 'advanced_search', 'search', 'list', 'index']));
+				$plural = (\substr($action, -1) === 's' || \in_array($action, ['get_similar', 'advanced_search', 'search', 'list', 'index', 'player', 'now_playing']));
 
 				// In APIv5, the action "album" is an exception, it is formatted as if it was a plural action.
 				// This outlier has been fixed in APIv6.
@@ -2141,7 +2432,7 @@ class AmpacheController extends ApiController {
 
 		// all 'entity list' kind of responses shall have the (deprecated) total_count element
 		if (\in_array($firstKey, ['song', 'album', 'artist', 'album_artist', 'song_artist',
-			'playlist', 'tag', 'genre', 'podcast', 'podcast_episode', 'live_stream'])) {
+			'playlist', 'tag', 'genre', 'podcast', 'podcast_episode', 'live_stream', 'catalog'])) {
 			$content = ['total_count' => \count($content[$firstKey])] + $content;
 		}
 
@@ -2209,6 +2500,7 @@ class AmpacheController extends ApiController {
 			case 403:	return 4703;	// access denied
 			case 404:	return 4704;	// not found
 			case 405:	return 4705;	// missing
+			case 410:	return 4706;	// deprecated
 			case 412:	return 4742;	// failed access check
 			case 501:	return 4700;	// access control not enabled
 			default:	return 5000;	// unexpected (not part of the API spec)

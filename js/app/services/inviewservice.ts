@@ -5,7 +5,7 @@
  * later. See the COPYING file.
  *
  * @author Pauli Järvinen <pauli.jarvinen@gmail.com>
- * @copyright 2019 - 2023 Pauli Järvinen
+ * @copyright 2019 - 2026 Pauli Järvinen
  *
  */
 
@@ -23,7 +23,7 @@ ng.module('Music').service('inViewService', ['$rootScope', function($rootScope :
 		const appView = document.getElementById('app-view');
 		const header = document.getElementById('header');
 
-		headerHeight = header.offsetHeight;
+		headerHeight = header?.offsetHeight ?? 0; // header is not present when operating within Nextcloud Desktop
 		appViewHeight = appView.offsetHeight;
 
 		dirty = false;

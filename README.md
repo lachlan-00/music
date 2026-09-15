@@ -164,7 +164,7 @@ The integration tests require the music app to be installed under the `apps` fol
 	# add cloud URL and credentials for Ampache and Subsonic APIs to behat.yml
 	../vendor/bin/behat
 
-For the acceptance tests, you need to upload all the tracks from the following zip file to your cloud instance: https://github.com/paulijar/music/files/2364060/testcontent.zip
+For the acceptance tests, you need to upload all the tracks from the following zip file to your cloud instance: https://github.com/user-attachments/files/30780531/testcontent.zip
 
 ### Translation scripts
 
