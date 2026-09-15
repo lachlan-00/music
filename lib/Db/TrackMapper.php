@@ -37,7 +37,7 @@ class TrackMapper extends BaseMapper {
 	protected function selectEntities(string $condition, ?string $extension = null) : string {
 		return "SELECT `*PREFIX*music_tracks`.*, `file`.`name` AS `filename`, `file`.`size`, `file`.`mtime` AS `file_mod_time`, `file`.`parent` AS `folder_id`,
 						`album`.`name` AS `album_name`, `artist`.`name` AS `artist_name`, `genre`.`name` AS `genre_name`,
-						`composer`.`name` AS `composer_name`
+						`composer`.`name` AS `composer_name`, `record_label`.`name` AS `record_label_name`
 				FROM `*PREFIX*music_tracks`
 				INNER JOIN `*PREFIX*filecache` `file`
 				ON `*PREFIX*music_tracks`.`file_id` = `file`.`fileid`
@@ -49,6 +49,8 @@ class TrackMapper extends BaseMapper {
 				ON `*PREFIX*music_tracks`.`genre_id` = `genre`.`id`
 				LEFT JOIN `*PREFIX*music_artists` `composer`
 				ON `*PREFIX*music_tracks`.`composer_id` = `composer`.`id`
+				LEFT JOIN `*PREFIX*music_record_labels` `record_label`
+				ON `*PREFIX*music_tracks`.`record_label_id` = `record_label`.`id`
 				WHERE $condition $extension";
 	}
 
@@ -170,6 +172,30 @@ class TrackMapper extends BaseMapper {
 
 		if (!empty($parentIds)) {
 			$sql .= ' AND `file`.`parent` IN ' . $this->questionMarks(\count($parentIds));
+			$params = \array_merge($params, $parentIds);
+		}
+
+		$result = $this->execute($sql, $params);
+		$rows = $result->fetchAll(\PDO::FETCH_COLUMN);
+		$result->closeCursor();
+
+		return $rows;
+	}
+
+	/**
+	 * Find file IDs of files scanned before the given version. Optionally, limit to files which are direct children of the given folders.
+	 * @param ?int[] $parentIds
+	 * @return int[]
+	 */
+	public function findFileIdsScannedBeforeVersion(string $userId, int $version, ?array $parentIds = null) : array {
+		$sql = "SELECT `file_id`
+				FROM `*PREFIX*music_tracks`
+				WHERE `user_id` = ?
+				AND (`scan_version` IS NULL OR `scan_version` < ?)";
+		$params = [$userId, $version];
+
+		if (!empty($parentIds)) {
+			$sql .= ' AND `file_id` IN (SELECT `fileid` FROM `*PREFIX*filecache` WHERE `parent` IN ' . $this->questionMarks(\count($parentIds)) . ')';
 			$params = \array_merge($params, $parentIds);
 		}
 
@@ -609,6 +635,7 @@ class TrackMapper extends BaseMapper {
 			'myplayedartist'    => "`artist_id` IN (SELECT * FROM (SELECT `artist_id` from `*PREFIX*music_tracks` GROUP BY `artist_id` HAVING MAX(`last_played`) $sqlOp) mysqlhack)", // operator "IS NULL" or "IS NOT NULL"
 			'time'              => "`length` $sqlOp ?",
 			'bitrate'           => "`bitrate` $sqlOp ?",
+			'sample_rate'       => "`sample_rate` $sqlOp ?",
 			'bpm'               => "`bpm` $sqlOp ?",
 			'song_genre'        => "$conv(`genre`.`name`) $sqlOp $conv(?)",
 			'album_genre'       => "`album_id` IN (SELECT * FROM (SELECT `album_id` FROM `*PREFIX*music_tracks` `t` JOIN `*PREFIX*music_genres` `g` ON `t`.`genre_id` = `g`.`id` GROUP BY `album_id` HAVING $conv(" . $this->sqlGroupConcat('`g`.`name`') . ") $sqlOp $conv(?)) mysqlhack)",
@@ -619,8 +646,11 @@ class TrackMapper extends BaseMapper {
 			'recent_played'     => "`*PREFIX*music_tracks`.`id` IN (SELECT * FROM (SELECT `id` FROM `*PREFIX*music_tracks` WHERE `user_id` = ? ORDER BY `last_played` DESC LIMIT $sqlOp) mysqlhack)",
 			'file'              => "$conv(`file`.`name`) $sqlOp $conv(?)",
 			'comment'           => "$conv(`comment`) $sqlOp $conv(?)",
-			'mbid_album'        => "`album`.`mbid` $sqlOp ?",
-			'mbid_artist'       => "`artist`.`mbid` $sqlOp ?"
+			'label'             => "$conv(`record_label`.`name`) $sqlOp $conv(?)",
+			'mbid_album'        => "$conv(`album`.`mbid`) $sqlOp $conv(?)",
+			'mbid_album_group'  => "$conv(`album`.`mbid_group`) $sqlOp $conv(?)",
+			'mbid_artist'       => "$conv(`artist`.`mbid`) $sqlOp $conv(?)",
+			'mbid_rel_track'    => "$conv(`mbid_rel_track`) $sqlOp $conv(?)"
 		];
 
 		// Add alias rules
@@ -641,6 +671,12 @@ class TrackMapper extends BaseMapper {
 			'`composer`.`name`',
 			'`album`.`name`',
 			'`genre`.`name`',
+			'`record_label`.`name`',
+			'`*PREFIX*music_tracks`.`mbid`',
+			'`*PREFIX*music_tracks`.`mbid_rel_track`',
+			'`album`.`mbid`',
+			'`album`.`mbid_group`',
+			'`artist`.`mbid`',
 		];
 		$parts = \array_map(fn ($field) => "$conv($field) $sqlOp $conv(?)", $fields);
 

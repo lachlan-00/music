@@ -71,7 +71,7 @@ function ($rootScope, $scope, $document, $timeout, $window, gettextCatalog, Rest
 	};
 
 	$scope.loadIndicatorVisible = function() {
-		let contentNotReady = ($rootScope.searchInProgress || $scope.checkingUnscanned);
+		let contentNotReady = ($rootScope.searchInProgress || $scope.checkingScanStatus);
 		return $rootScope.loading
 			|| (contentNotReady && $scope.viewingLibrary());
 	};
@@ -85,7 +85,7 @@ function ($rootScope, $scope, $document, $timeout, $window, gettextCatalog, Rest
 	libraryFactory.subscribe('collectionUpdating', $scope, () => {
 		$scope.updateAvailable = false;
 
-		if ($scope.viewingLibrary) {
+		if ($scope.viewingLibrary()) {
 			$rootScope.loading = true;
 		}
 
@@ -103,28 +103,32 @@ function ($rootScope, $scope, $document, $timeout, $window, gettextCatalog, Rest
 
 	$scope.hideScanBar = function(event) {
 		event.stopPropagation();
-		// Acknowledge the scanning needs without taking any action. The page needs to be reloaded
-		// to check them again.
-		$scope.unscannedFiles = null;
-		$scope.dirtyFiles = null;
-		$scope.obsoleteFiles = null;
+		// Acknowledge the scanning needs without taking any action. The files can still be (re)scanned in the Settings view.
+		$scope.filesToScanBannerHidden = true;
+	};
+
+	$scope.filesToScanBannerAllowed = function() {
+		return !$scope.filesToScanBannerHidden && !$scope.scanning && $scope.viewingLibrary();
 	};
 
 	$scope.updateFilesToScan = function() {
 		$scope.unscannedFiles = null;
 		$scope.dirtyFiles = null;
 		$scope.obsoleteFiles = null;
-		$scope.checkingUnscanned = true;
+		$scope.filesScannedOnOldSw = null;
+		$scope.filesToScanBannerHidden = false;
+		$scope.checkingScanStatus = true;
 
 		Restangular.one('scanstate').get().then(function(state) {
-			$scope.checkingUnscanned = false;
+			$scope.checkingScanStatus = false;
 			$scope.unscannedFiles = state.unscannedFiles;
 			$scope.dirtyFiles = state.dirtyFiles;
 			$scope.obsoleteFiles = state.obsoleteFiles;
+			$scope.filesScannedOnOldSw = state.filesScannedOnOldSw;
 			$scope.noMusicAvailable = (state.scannedCount + state.unscannedFiles.length === 0);
 		},
 		function(error) {
-			$scope.checkingUnscanned = false;
+			$scope.checkingScanStatus = false;
 			OCA.Music.Dialogs.showNotification(
 					gettextCatalog.getString('Failed to check for new audio files (error {{ code }}); check the server logs for details', {code: error.status})
 			);
@@ -137,6 +141,7 @@ function ($rootScope, $scope, $document, $timeout, $window, gettextCatalog, Rest
 				// Update the collection automatically. During the scanning, the user can also click the "update" button to update the collection.
 				$scope.scanning = false;
 				libraryFactory.reloadCollection();
+				$scope.updateFilesToScan();
 			},
 			(error) => {
 				$scope.scanning = false;
@@ -239,7 +244,7 @@ function ($rootScope, $scope, $document, $timeout, $window, gettextCatalog, Rest
 		$rootScope.$emit('hideDetails');
 	};
 
-	function scrollOffset() {
+	$scope.scrollOffset = function() {
 		let controls = document.getElementById('controls');
 		let offset = controls?.offsetHeight ?? 0;
 		if (OCA.Music.Utils.getScrollContainer()[0] !== document.getElementById('app-content')) {
@@ -247,14 +252,14 @@ function ($rootScope, $scope, $document, $timeout, $window, gettextCatalog, Rest
 			offset += header?.offsetHeight;
 		}
 		return offset;
-	}
+	};
 
 	$scope.scrollToItem = function(itemId, animationTime = 500) {
 		if (itemId) {
 			let container = OCA.Music.Utils.getScrollContainer();
 			let element = $('#' + itemId);
 			if (container && element) {
-				container.scrollToElement(element, scrollOffset(), animationTime);
+				container.scrollToElement(element, $scope.scrollOffset(), animationTime);
 			}
 		}
 	};
@@ -347,7 +352,7 @@ function ($rootScope, $scope, $document, $timeout, $window, gettextCatalog, Rest
 
 	// Test if element is at least partially within the view-port
 	function isElementInViewPort(el) {
-		return inViewService.isElementInViewPort(el, -scrollOffset());
+		return inViewService.isElementInViewPort(el, -$scope.scrollOffset());
 	}
 
 	function setMasterLayout(classes) {
@@ -418,10 +423,11 @@ function ($rootScope, $scope, $document, $timeout, $window, gettextCatalog, Rest
 		const appContent = $('#app-content');
 		if (appContent.hasClass('with-app-sidebar')) {
 			let sidebarWidth = $('#app-sidebar').outerWidth();
-			let viewWidth = $('#header').outerWidth();
+			let viewPortWidth = $('#content').outerWidth();
 
-			if (sidebarWidth < 0.27 * viewWidth) {
-				appContent.css('margin-inline-end', sidebarWidth);
+			if (sidebarWidth < 0.27 * viewPortWidth) {
+				// A generic rule on Nextcloud Desktop uses !important, overriding it with jQuery needs some trickery
+				appContent.css('cssText', `margin-inline-end: ${sidebarWidth}px !important`);
 			} else {
 				appContent.css('margin-inline-end', '');
 			}
