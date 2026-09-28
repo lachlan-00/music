@@ -1891,11 +1891,12 @@ class AmpacheController extends ApiController {
 			$id = $entity->getId();
 			$url = $this->urlGenerator->linkToRouteAbsolute('music.ampacheImage.image') . "?object_type=$type&object_id=$id";
 
-			// The token may be unavailable if the API key used on the handshake has been deleted since. The image
-			// endpoint serves the placeholder without a token, which is a better outcome than a URL with an empty
-			// token, which would always be rejected as invalid.
+			// The API key behind the current session cannot have been deleted since: doing so revokes all of
+			// its sessions immediately (see SettingController::removeUserKey), and this point is only reached
+			// with an already validated, live session.
 			$token = $this->imageService->getToken($type, $id, $this->session->getAmpacheUserId());
-			return ($token !== null) ? "$url&token=$token" : $url;
+			\assert($token !== null);
+			return "$url&token=$token";
 		}
 	}
 
@@ -2052,11 +2053,6 @@ class AmpacheController extends ApiController {
 			$album = $track->getAlbum();
 			return ($album !== null && $album->getId() !== null) ? $this->createCoverUrl($album) : '';
 		};
-		// A song carries the art of its album, and so it has art exactly when the album has a cover file
-		$hasArt = function (Track $track) : bool {
-			$album = $track->getAlbum();
-			return ($album !== null && $album->getCoverFileId() !== null);
-		};
 		$renderRef = fn (int $id, string $name) => $this->renderAlbumOrArtistRef($id, $name);
 		$genreKey = $this->genreKey();
 		// In APIv6 JSON format, there is a new property `artists` with an array value
@@ -2064,7 +2060,7 @@ class AmpacheController extends ApiController {
 
 		return [
 			'song' => \array_map(
-				fn ($t) => $t->toAmpacheApi($this->l10n, $createPlayUrl, $createImageUrl, $hasArt, $renderRef, $genreKey, $includeArtists),
+				fn ($t) => $t->toAmpacheApi($this->l10n, $createPlayUrl, $createImageUrl, $renderRef, $genreKey, $includeArtists),
 				$tracks
 			)
 		];
@@ -2074,13 +2070,14 @@ class AmpacheController extends ApiController {
 	 * @param Playlist[] $playlists
 	 */
 	private function renderPlaylists(array $playlists, bool $includeTracks = false) : array {
-		// The "All tracks" pseudo playlist has no counterpart in the database, so the image endpoint could not
-		// resolve it; it's the one playlist for which we have no art URL to give.
-		$isRealPlaylist = fn (Playlist $playlist) => $playlist->getId() !== self::ALL_TRACKS_PLAYLIST_ID;
-		$createImageUrl = fn (Playlist $playlist) => $isRealPlaylist($playlist) ? $this->createCoverUrl($playlist) : '';
+		// The "All tracks" pseudo playlist has no counterpart in the database and hence no cover to look up,
+		// but AmpacheImageController serves it its own placeholder, just like it does for any other entity
+		// with no art, so no special-casing is needed here for the URL itself.
+		$hasArt = fn (Playlist $playlist) => $playlist->getId() !== self::ALL_TRACKS_PLAYLIST_ID;
+		$createImageUrl = fn (Playlist $playlist) => $this->createCoverUrl($playlist);
 
 		$result = [
-			'playlist' => \array_map(fn ($p) => $p->toAmpacheApi($createImageUrl, $isRealPlaylist, $includeTracks), $playlists)
+			'playlist' => \array_map(fn ($p) => $p->toAmpacheApi($createImageUrl, $hasArt, $includeTracks), $playlists)
 		];
 
 		// annoyingly, the structure of the included tracks is quite different in JSON compared to XML

@@ -146,9 +146,10 @@ class Scanner extends PublicEmitter {
 		}
 
 		// An image named after an artist is a photo of that artist, and letting it double as the album cover
-		// is what makes an uploaded artist photo look like it replaced the cover. Use it for the album only
-		// when the folder provides no other image, as having no album cover at all is the worse outcome.
-		if (empty($artistIds) || !self::folderHasOtherImage($file)) {
+		// is what makes an uploaded artist photo look like it replaced the cover. `updateFolderCover` only
+		// ever sets the cover of an album which doesn't already have one, so a genuine cover image elsewhere
+		// in the folder still wins the slot on its own turn regardless of scan order.
+		if (empty($artistIds)) {
 			$coverFileId = $file->getId();
 			$parentFolderId = $file->getParent()->getId();
 			if ($this->albumBusinessLayer->updateFolderCover($coverFileId, $parentFolderId)) {
@@ -156,21 +157,8 @@ class Scanner extends PublicEmitter {
 				$this->cache->remove($userId, 'collection');
 			}
 		} else {
-			$this->logger->debug('updateImage - artist image not used as album cover, the folder has other images');
+			$this->logger->debug('updateImage - artist image not used as album cover');
 		}
-	}
-
-	/**
-	 * Check whether the parent folder of the given image contains at least one other image file
-	 */
-	private static function folderHasOtherImage(File $file) : bool {
-		foreach ($file->getParent()->getDirectoryListing() as $node) {
-			if ($node instanceof File && $node->getId() !== $file->getId()
-					&& StringUtil::startsWith($node->getMimeType(), 'image')) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 	/**

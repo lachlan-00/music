@@ -284,7 +284,6 @@ class Track extends Entity {
 			IL10N $l10n,
 			callable $createPlayUrl,
 			callable $createImageUrl,
-			callable $hasArt,
 			callable $renderAlbumOrArtistRef,
 			string $genreKey,
 			bool $includeArtists) : array {
@@ -332,7 +331,8 @@ class Track extends Entity {
 			'r128_track_gain'       => $this->getR128TrackGain(),
 		];
 
-		$result['has_art'] = $hasArt($this);
+		// A song carries the art of its album, and so it has art exactly when the album has a cover file
+		$result['has_art'] = ($album !== null && $album->getCoverFileId() !== null);
 
 		$genreId = $this->getGenreId();
 		if ($genreId !== null) {
