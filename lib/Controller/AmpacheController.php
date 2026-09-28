@@ -115,6 +115,34 @@ class AmpacheController extends ApiController {
 	 */
 	private const DEPRECATED_ACTIONS = ['tag', 'tags', 'tag_albums', 'tag_artists', 'tag_songs'];
 
+	/**
+	 * Additional request argument names accepted for a method parameter, on top of the name used in
+	 * the method's own signature below. These mirror the `$input[...] ?? $input[...]` fallbacks found
+	 * in the reference Ampache server (`src/Module/Api/Method/**`), where the same value may be sent
+	 * by the client under more than one name depending on the API version or on which action variant
+	 * the call was built against.
+	 *
+	 * Our method signatures always use the API8 (the version after API6 that this class targets next)
+	 * parameter name as the primary/only name; this table adds back the older or version-specific
+	 * alternative names so that both API6 and API8 clients are understood without maintaining two
+	 * separate implementations. Order does not matter: at most one of the names is normally sent.
+	 *
+	 * @var array<string, array<string, string[]>>
+	 */
+	private const PARAM_ALIASES = [
+		'flag'              => ['id' => ['filter']],
+		'rate'              => ['id' => ['filter']],
+		'record_play'       => ['id' => ['filter']],
+		'stream'            => ['id' => ['filter']],
+		'download'          => ['id' => ['filter']],
+		'get_art'           => ['id' => ['filter']],
+		'update_podcast'    => ['id' => ['filter']],
+		'user'              => ['username' => ['filter']],
+		'playlist_add_song' => ['song' => ['id']],
+		'playlist_add'      => ['id' => ['song'], 'type' => ['object_type']],
+		'search_songs'      => ['filter' => ['rule_1_input']],
+	];
+
 	public function __construct(
 		string $appName,
 		IRequest $request,
@@ -248,7 +276,11 @@ class AmpacheController extends ApiController {
 					return $value;
 				};
 
-				$parameterExtractor = new RequestParameterExtractor($this->request, ['limit' => $limitFilter]);
+				$parameterExtractor = new RequestParameterExtractor(
+					$this->request,
+					['limit' => $limitFilter],
+					self::PARAM_ALIASES[$action] ?? []
+				);
 				try {
 					$parameterValues = $parameterExtractor->getParametersForMethod($reflection);
 				} catch (RequestParameterExtractorException $ex) {
@@ -938,7 +970,7 @@ class AmpacheController extends ApiController {
 	}
 
 	#[AmpacheAPI]
-	protected function playlist_add(int $filter, int $id, string $type) : array {
+	protected function playlist_add(int $filter, int $id, string $type = 'song') : array {
 		$userId = $this->userId();
 
 		if (!$this->getBusinessLayer($type)->exists($id, $userId)) {

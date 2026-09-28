@@ -17,9 +17,20 @@ use OCP\IRequest;
  * Match HTTP request arguments to method parameters for Subsonic or Ampache API
  */
 class RequestParameterExtractor {
+	/**
+	 * @param array $customFilters Map from a method parameter name to a callback used to post-process
+	 *                             the raw request value bound to that parameter.
+	 * @param array<string, string[]> $aliases Map from a method parameter name to a list of alternative
+	 *                                         request argument names accepted for it. Used to mirror
+	 *                                         parameter names accepted by an external API (e.g. Ampache)
+	 *                                         for the same purpose under a different call convention.
+	 *                                         The alternatives are only consulted when the request
+	 *                                         doesn't carry the parameter under its primary name.
+	 */
 	public function __construct(
 		private IRequest $request,
 		private array $customFilters = [],
+		private array $aliases = [],
 	) {
 	}
 
@@ -50,6 +61,15 @@ class RequestParameterExtractor {
 			$parameterValue = $this->getRepeatedParam($paramName);
 		} else {
 			$parameterValue = $this->request->getParam($paramName);
+
+			if ($parameterValue === null) {
+				foreach ($this->aliases[$paramName] ?? [] as $alias) {
+					$parameterValue = $this->request->getParam($alias);
+					if ($parameterValue !== null) {
+						break;
+					}
+				}
+			}
 		}
 
 		if (\array_key_exists($paramName, $this->customFilters)) {
