@@ -12,22 +12,24 @@ In order of authority:
 | `src/Module/Api/Json6_Data.php` / `Xml6_Data.php` | the definitive field lists |
 | `docs/api-responses/api6/json-responses/` | 244 captured real payloads — the fastest way to diff |
 | `docs/openapi-6.json` | REST paths + `x-rpc-mappings`; **only 23 schemas**, so not a complete field reference |
+| `docs/openapi.json` | The API8 spec — 145 schemas, a genuinely complete field reference. API8 isn't our target yet, but its schemas are close enough to API6's (confirmed field-by-field for the entity types below) to fill the gaps `openapi-6.json` can't |
 | `docs/API-Errors.md` | the `47xx` error code table |
 
 The captured-payload corpus is the most useful of these in practice: comparing our JSON output for an
 action against the file of the same name is a two-minute check that catches field-level drift the
-OpenAPI document cannot describe.
+OpenAPI document cannot describe. Where a field-level gap below was found or refined using `openapi.json`
+instead, it says so explicitly.
 
 ## Summary
 
 | | Count |
 |---|---|
 | API6 canonical actions | 132 |
-| Implemented here | 79 |
-| Missing | 60 |
+| Implemented here | 82 |
+| Missing | 57 |
 | Implemented here but not part of API6 | 7 |
 
-(79 + 60 ≠ 132 because 7 of our actions are outside API6 — see [Actions we serve that API6 does
+(82 + 57 ≠ 132 because 7 of our actions are outside API6 — see [Actions we serve that API6 does
 not](#actions-we-serve-that-api6-does-not).)
 
 API6 additionally defines 37 `REST_ACTION` aliases (`playlists_create` → `playlist_create`, `rules` →
@@ -79,8 +81,7 @@ success response is harder for a client to reason about than an honest "not supp
 
 - **Media types we do not have**: `video`, `videos`, `deleted_videos`
 - **Ampache-specific playback**: `democratic`, `localplay`, `localplay_songs`
-- **Ampache-specific metadata**: `license`, `licenses`, `license_songs`, `label`, `labels`,
-  `label_artists`
+- **Ampache-specific metadata**: `license`, `licenses`, `license_songs`
 - **Ampache sharing** (Nextcloud has its own, differently shaped): `share`, `shares`, `share_create`,
   `share_edit`, `share_delete`
 - **Social features**: `followers`, `following`, `toggle_follow`, `friends_timeline`, `timeline`,
@@ -104,9 +105,9 @@ success response is harder for a client to reason about than an honest "not supp
 More likely to break a client than a missing action, and much easier to miss. Compared against the
 captured API6 payloads.
 
-### `song` — 40 fields vs Ampache's 46
+### `song` — vs Ampache's 46
 
-Missing: `averagerating`, `catalog`, `channels`, `disksubtitle`, `license`, `mbid`, `publisher`.
+Missing: `averagerating`, `catalog`, `channels`, `disksubtitle`, `license`.
 Extra: `preciserating` (an API4-era field Ampache no longer emits).
 
 `catalog` is the notable one now that we have catalogs — it should carry the owning catalog id, and it
@@ -115,15 +116,15 @@ is an **int** in v6 (it became a string in v8).
 Ampache also flattens every `song.metadata` row into an extra top-level key (name sanitised by
 replacing `` (){}/\# `` and spaces with `_`), so the v6 song object is not a closed shape.
 
-### `album` — 17 vs 21
+### `album` — vs Ampache's 21
 
-Missing: `averagerating`, `mbid`, `mbid_group`, `songartists`, `type` (`type` is the release type).
-Extra: `preciserating`.
+Missing: `averagerating`, `songartists`, `type` (`type` is the release type). Extra: `preciserating`.
+(`mbid` and `mbid_group` are already implemented — `AmpacheController.php:2013-2014`.)
 
-### `artist` — 15 vs 19
+### `artist` — vs Ampache's 19
 
-Missing: `averagerating`, `mbid`, `placeformed`, `summary`, `yearformed`. Extra: `preciserating`.
-We hold `summary` via Last.fm already.
+Missing: `averagerating`, `placeformed`, `summary`, `yearformed`. Extra: `preciserating`.
+We hold `summary` via Last.fm already. (`mbid` is already implemented — `AmpacheController.php:1961`.)
 
 ### `playlist` — 14 vs 16
 
@@ -136,6 +137,8 @@ Ampache's live_stream object is exactly six fields: `id`, `name`, `url`, `codec`
 Confirmed against a live station, which serialises as
 `['art', 'has_art', 'id', 'name', 'site_url', 'url']`.
 
+`id` is also now fixed to be a string like everywhere else (was emitted as a raw int — `RadioStation.php`).
+
 ### `podcast` — `art` points off-site
 
 Our podcast `art` is the image URL taken verbatim from the RSS feed (e.g.
@@ -144,6 +147,35 @@ through its own art endpoint. The practical consequences are that the client's I
 feed host, the image is unavailable when the host is, and it bypasses our caching entirely. Every
 other entity type routes art through `image.php` or `get_art`.
 
+`averagerating` is now implemented (mirrors `rating`/`preciserating`, same as every other entity type).
+Still missing: `generator` (the RSS feed's `<generator>` element) — we don't parse or store it today,
+so adding it needs a schema migration plus a new field on `PodcastChannelBusinessLayer::parseChannelDataFromXml`,
+not just a render-side change.
+
+### `podcast_episode` — not previously audited at the field level
+
+Was missing, now implemented: `public_url` (mirrors `website`, same duplication `podcast` already has),
+`filename` (derived from the enclosure URL's path, `PodcastEpisode::filenameFromUrl`), `mode` (hardcoded
+`null`, matching how `song.mode` is also just a placeholder — cbr/vbr isn't extracted for either), `catalog`
+(always the synthetic `'podcasts'` catalog id), `averagerating`.
+
+Still missing, and not cheap: `category` (per-episode category isn't parsed from the feed — only the
+channel-level one is), `rate` / `channels` (no audio metadata extraction runs on podcast enclosures, unlike
+scanned audio files). `playcount` / `played` need a play-history data model we don't have for podcast
+episodes. `podcast` (a back-reference to the parent channel) needs a name-resolving callback threaded
+through `renderPodcastEpisodes`, the same pattern `renderAlbumOrArtistRef` already uses elsewhere.
+
+### `genre` — missing `is_hidden` / `merge`
+
+Not previously audited at the field level. Both are now implemented as constants (`false` / `[]`) since
+this app has no genre-merge concept.
+
+### `bookmark` — `creation_date` / `update_date` were the wrong JSON type
+
+Not previously audited (no OpenAPI schema existed for `bookmark` until the API8 spec added one). Ampache
+declares both as Unix-timestamp integers; we emitted ISO-8601 strings (`Util::formatDateTimeUtcOffset`).
+Fixed to `\strtotime(...)`, matching how `Playlist::last_update` already does the same conversion.
+
 ### `handshake` / `ping`
 
 Missing: `streamtoken`, `users`. We emit `server`, `version` and `compatible` in `handshake` as well,
@@ -151,6 +183,9 @@ where Ampache only has those in `ping`.
 
 Note `stream token` is a distinct long-lived credential in Ampache, used as `ssid=` in every
 `play_url`. We have no equivalent; our stream URLs carry the session `auth` instead, so they expire.
+
+`max_video` was emitted as `null`, but Ampache declares it (like every other `max_*` field) as a
+non-nullable integer. Fixed to `0`, matching how `videos` is already reported as `0`.
 
 ## Protocol-level gaps
 
