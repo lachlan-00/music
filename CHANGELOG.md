@@ -8,6 +8,11 @@
   * To use out-of-path ffmpeg, configure `'music.use_ffpmeg' => <path_to_ffmpeg_executable>`
 
 ### Changed
+- Ampache API: Accept the alternative request argument names (e.g. `filter` in place of `id`, or
+  `object_type` in place of `type`) that the reference Ampache server accepts for the actions `flag`,
+  `rate`, `record_play`, `stream`, `download`, `get_art`, `update_podcast`, `user`, `playlist_add_song`,
+  `playlist_add` and `search_songs`, so that clients built against either API6 or API8 parameter
+  naming are understood
 
 ### Fixed
 - Unhandled exception breaking the Music UI when operating within the Nextcloud Desktop Workspace
