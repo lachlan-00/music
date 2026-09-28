@@ -325,7 +325,7 @@ class AmpacheController extends ApiController {
 			'max_song'            => $this->trackBusinessLayer->maxId($user),
 			'max_album'           => $this->albumBusinessLayer->maxId($user),
 			'max_artist'          => $this->artistBusinessLayer->maxId($user),
-			'max_video'           => null,
+			'max_video'           => 0,
 			'max_podcast'         => $this->podcastChannelBusinessLayer->maxId($user),
 			'max_podcast_episode' => $this->podcastEpisodeBusinessLayer->maxId($user),
 			'username'            => $user
