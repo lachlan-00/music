@@ -1,12 +1,21 @@
 ## [Unreleased]
 
 ### Added
+- Subsonic API: Transcoding support in the `stream` endpoint
+  [#163](https://github.com/nc-music/music/pull/163) @ipoupaille
+  * Enabled by default if `ffmpeg` is available in the path
+  * To opt out, configure `'music.use_ffpmeg' => false`
+  * To use out-of-path ffmpeg, configure `'music.use_ffpmeg' => <path_to_ffmpeg_executable>`
 
 ### Changed
 
 ### Fixed
 - Unhandled exception breaking the Music UI when operating within the Nextcloud Desktop Workspace
-  [#162](https://github.com/nc-music/music/issues/162)
+  [#162](https://github.com/nc-music/music/issues/162)    
+- Background tasks not being registered on a new application install before disable + enable of the app or app upgrade or `occ maintenance:repair`
+  [#172](https://github.com/nc-music/music/pull/172) @Bubu
+- Subsonic API: HTTP error 500 when trying to open an album containing no tracks
+  [#169](https://github.com/nc-music/music/issues/169)
 - An image file named after an artist no longer doubles as the cover of the album in the same folder, unless the folder has no other image. A rescan is needed for this to take effect on an existing library
   [#102](https://github.com/nc-music/music/issues/102)
 - Ampache API:
@@ -14,7 +23,7 @@
   * Art URL was broken if the API key used on the handshake had been deleted since
   * Art fetched with the action `get_art` was not cached by the clients, unlike the art fetched from `image.php`
     [#102](https://github.com/nc-music/music/issues/102)
-    
+
 ## 3.2.1 - 2026-08-31
 
 ### Fixed
