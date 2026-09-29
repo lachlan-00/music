@@ -694,6 +694,67 @@ class AmpacheController extends ApiController {
 	}
 
 	#[AmpacheAPI]
+	protected function song_tags(int $filter) : array {
+		$userId = $this->userId();
+		$track = $this->trackBusinessLayer->find($filter, $userId);
+		$artist = $this->artistBusinessLayer->find($track->getArtistId(), $userId);
+		$album = $this->albumBusinessLayer->find($track->getAlbumId(), $userId);
+
+		$rootFolder = $this->librarySettings->getFolder($userId);
+		$lyrics = $this->detailsService->getLyricsAsPlainText($track->getFileId(), $rootFolder);
+
+		return ['song_tag' => [$track->toAmpacheSongTagsApi($artist, $album, $lyrics)]];
+	}
+
+	#[AmpacheAPI]
+	protected function get_lyrics(int $filter) : array {
+		// request param `plugins` is ignored: we have no lyrics plugins, only our own stored/parsed lyrics
+		$userId = $this->userId();
+		$track = $this->trackBusinessLayer->find($filter, $userId);
+
+		$rootFolder = $this->librarySettings->getFolder($userId);
+		$lyrics = $this->detailsService->getLyricsAsPlainText($track->getFileId(), $rootFolder);
+
+		$plugin = [];
+		if ($lyrics !== null) {
+			$lyrics = \mb_ereg_replace("\n", '<br />', $lyrics); // matches how the `song` action already represents lyrics
+			$plugin['database'] = ['text' => $lyrics];
+		}
+
+		return [
+			'object_id'   => $filter,
+			'object_type' => 'song',
+			'plugin'      => $plugin
+		];
+	}
+
+	/**
+	 * Maps a stream/download URL, as previously handed out by this same server, back to the song it points at.
+	 * Like the original Ampache server, this is done by parsing the query string alone; the URL is never
+	 * required to originate from this exact request's host.
+	 */
+	#[AmpacheAPI]
+	protected function url_to_song(?string $filter, ?string $url) : array {
+		// the `filter` alias takes precedence over the documented `url` argument, matching the real Ampache server
+		$streamUrl = $filter ?: $url;
+		if (empty($streamUrl)) {
+			throw new AmpacheException("Required parameter 'url' missing", 400);
+		}
+
+		$query = (string)\parse_url(\html_entity_decode($streamUrl), PHP_URL_QUERY);
+		\parse_str($query, $params);
+		$action = $params['action'] ?? null;
+		$type = $params['type'] ?? 'song';
+
+		if (!\in_array($action, ['stream', 'download']) || $type !== 'song' || !isset($params['id'])) {
+			throw new AmpacheException("Not a song stream URL: $streamUrl", 400);
+		}
+
+		$track = $this->trackBusinessLayer->find((int)$params['id'], $this->userId());
+		return $this->renderSongs([$track]);
+	}
+
+	#[AmpacheAPI]
 	protected function songs(
 			?string $filter, ?string $add, ?string $update,
 			int $limit, int $offset = 0, bool $exact = false) : array {
@@ -1114,6 +1175,14 @@ class AmpacheController extends ApiController {
 			default:
 				throw new AmpacheException("Unexpected status code {$result['status']}", 400);
 		}
+	}
+
+	/**
+	 * Alias of `update_podcast`, added under this name on API6
+	 */
+	#[AmpacheAPI]
+	protected function podcast_update(int $id) : array {
+		return $this->update_podcast($id);
 	}
 
 	#[AmpacheAPI]

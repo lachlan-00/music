@@ -25,12 +25,17 @@ instead, it says so explicitly.
 | | Count |
 |---|---|
 | API6 canonical actions | 132 |
-| Implemented here | 82 |
-| Missing | 57 |
+| Implemented here | 88 |
+| Missing | 51 |
 | Implemented here but not part of API6 | 7 |
 
-(82 + 57 ≠ 132 because 7 of our actions are outside API6 — see [Actions we serve that API6 does
+(88 + 51 ≠ 132 because 7 of our actions are outside API6 — see [Actions we serve that API6 does
 not](#actions-we-serve-that-api6-does-not).)
+
+These counts are re-derived directly from the two sources of truth (`Api6::METHOD_LIST` resolved
+through each method's `ACTION` constant, and the `#[AmpacheAPI]`-attributed methods of
+`AmpacheController`), not carried over by hand from the previous revision of this document — see
+[Regenerating the action diff](#regenerating-the-action-diff).
 
 API6 additionally defines 37 `REST_ACTION` aliases (`playlists_create` → `playlist_create`, `rules` →
 `search_rules`, …). Those exist only so Ampache's REST rewrite can land on the same handler; they are
@@ -46,16 +51,32 @@ it, and we already hold the data".
 
 ### Tier 1 — worth doing
 
-| Action | Why | What we already have |
-|---|---|---|
-| `now_playing` | Clients show a server-wide "currently playing" view; several probe it on connect | `TrackBusinessLayer::getNowPlaying()` |
-| `get_lyrics` | Lyrics display is a headline feature of the app, but is unreachable over Ampache | `DetailsService::getLyricsAsPlainText()` |
-| `podcast_update` | A plain alias of `update_podcast`, which we already serve. One line | — |
-| `url_to_song` | Maps a stream URL back to a song id; used when importing/queueing by URL | our own `stream` URL format |
-| `song_tags` | Per-song genre list; cheap given the data | `GenreBusinessLayer` |
+Closed. `catalogs` and `catalog` were the first two implemented (see
+[nc-music#144](https://github.com/nc-music/music/issues/144)); the rest of the tier — `now_playing`,
+`get_lyrics`, `podcast_update`, `url_to_song`, and `song_tags` — are now implemented too. Notes on
+each, including what's honestly stubbed rather than faked:
 
-`catalogs` and `catalog` were in this tier and are now implemented (see
-[nc-music#144](https://github.com/nc-music/music/issues/144)).
+- **`now_playing`** — `TrackBusinessLayer::getNowPlaying()`. Unlike the real Ampache server, this
+  reports only the requesting user's own playback, not every user of the instance (same limitation,
+  and the same reasoning, as the Subsonic API's equivalent call). The entry self-expires once the
+  track would have played to its end (falling back to a fixed window for a track of unknown length),
+  so a client that stops without telling us doesn't leave a stale entry behind.
+- **`get_lyrics`** — `DetailsService::getLyricsAsPlainText()`. We have no lyrics-retrieval plugins, so
+  the `plugins` request argument is accepted but has no effect; only the `database` source can ever be
+  populated.
+- **`podcast_update`** — a one-line alias of `update_podcast`, as anticipated.
+- **`url_to_song`** — parses the query string of a URL previously handed out by our own `stream`
+  action, the same permissive way the real Ampache server parses one of its own; the URL is not
+  required to belong to the current request's host. A URL for a `podcast_episode` or `live_stream`
+  (or anything unrecognised) is rejected rather than resolved, since only songs have an entry to return.
+- **`song_tags`** — the real action returns raw per-file metadata (id3-style tags), not a genre list as
+  originally assumed here. `Track::toAmpacheSongTagsApi()` mirrors Ampache's full field set so a client
+  can rely on the same keys always being present, but many of them have no equivalent in our data model
+  and are always `null`: `art`, `artists` (multi-artist credits), `barcode`, `catalog`,
+  `catalog_number`, `channels`, `description`, `disksubtitle`, `display_x`/`display_y` (video-only),
+  `encoding`, `frame_rate` (video-only), `isrc`, `language`, `mb_albumartistid(_array)`,
+  `mb_artistid_array`, `mode`, `original_name`, `original_year`, `release_date`, `release_status`,
+  `release_type`, `summary`, `totaldisks`, `totaltracks`, `version`.
 
 ### Tier 2 — implementable, no strong client pressure
 
@@ -71,7 +92,7 @@ model we do not have — Ampache gates them on `MANAGER`/`CONTENT_MANAGER`.
 
 `update_art`, `update_from_tags`, `update_artist_info` — rescan-shaped, same permission problem.
 
-`get_external_metadata` (we have `LastfmService`), `search_group`, `player`, `podcast_edit`,
+`get_external_metadata` (we have `LastfmService`), `search_group`, `podcast_edit`,
 `podcast_episode_delete`.
 
 ### Tier 3 — no meaningful Nextcloud equivalent; document as unsupported
@@ -152,6 +173,11 @@ Still missing: `generator` (the RSS feed's `<generator>` element) — we don't p
 so adding it needs a schema migration plus a new field on `PodcastChannelBusinessLayer::parseChannelDataFromXml`,
 not just a render-side change.
 
+The action `podcasts` was also missing the `add`/`update` date-filter arguments that every other
+`BusinessLayer`-backed list action (`artists`, `albums`, `songs`, …) already supports — an easy one to
+miss since every other aspect of the action already worked. Fixed; it now goes through the same
+`findEntities()` helper as the rest.
+
 ### `podcast_episode` — not previously audited at the field level
 
 Was missing, now implemented: `public_url` (mirrors `website`, same duplication `podcast` already has),
@@ -186,6 +212,26 @@ Note `stream token` is a distinct long-lived credential in Ampache, used as `ssi
 
 `max_video` was emitted as `null`, but Ampache declares it (like every other `max_*` field) as a
 non-nullable integer. Fixed to `0`, matching how `videos` is already reported as `0`.
+
+`clean` was hardcoded to the current time on every single call (`\date('c', \time())`), which made it
+useless as a change-detection signal — the whole point of the field. It, and the same-purpose
+`catalog` action's `last_clean`, now report a real, persisted timestamp: `LibrarySettings::
+getLastCleanTime()`/`setLastCleanTime()` track it per user, updated whenever `Scanner::
+removeUnavailableFiles()` runs, the same way Ampache's own `catalog.last_clean` is updated whenever a
+catalog clean/verify pass runs (whether or not it actually removed anything).
+
+### `stream` / `download` — transcoding was accepted but silently ignored
+
+Both actions used to explicitly ignore the `format`/`bitrate` arguments and always return the original
+file, even though ffmpeg-based transcoding already existed for the Subsonic API. The transcoding
+decision and the ffmpeg invocation itself are now shared between the two APIs via
+`AudioTranscodeService`, so a client that asks `stream`/`download` for a specific format or a capped
+bitrate gets one, exactly like it already could over Subsonic. One unit conversion matters here:
+Ampache's `bitrate` argument is bits per second, while the internal convention (and Subsonic's own
+`maxBitRate`) is kilobits per second.
+
+Streaming from a time `offset` remains unsupported and still errors out rather than silently starting
+from the beginning of the file (see the code comment on `stream` for the reasoning).
 
 ## Protocol-level gaps
 
@@ -235,12 +281,41 @@ canonical.
 
 ## Regenerating the action diff
 
-```bash
-# canonical API6 actions come from Api6.php's METHOD_LIST, resolved through each Method class's
-# ACTION / REST_ACTION constants (some are inherited from an Abstract* parent)
-grep -oE 'Method\\(Api6\\)?[A-Za-z0-9_]+::(ACTION|REST_ACTION)' \
-    ../ampache-develop8/src/Module/Api/Api6.php | sort -u
+Ours are simply the attributed methods:
 
-# ours are simply the attributed methods
-grep -B1 'function ' lib/Controller/AmpacheController.php | grep -A1 'AmpacheAPI'
+```bash
+grep -B1 'protected function ' lib/Controller/AmpacheController.php | grep -A1 'AmpacheAPI' \
+    | grep 'protected function' | sed -E 's/^\s*protected function ([a-zA-Z0-9_]+).*/\1/' | sort -u
 ```
+
+The canonical list is `Api6::METHOD_LIST`, keyed by each Method class's `ACTION` constant (some
+inherited from an `Abstract*` parent); `REST_ACTION`-keyed entries are the aliases and are not part of
+the 132. The class names alone don't give the snake_case action strings (there's no mechanical
+transform from e.g. `AdvancedSearchMethod` to `advanced_search`), and both `grep -P` lookaheads and a
+plain `sed`/`perl` one-liner turned out to be too fragile against this file's mix of `Method\Foo` and
+`Method\Api6\Foo6Method` shapes to be worth fighting with — a short script reading each constant
+directly is more reliable:
+
+```python
+import re, glob
+
+text = open('src/Module/Api/Api6.php', encoding='utf-8').read()
+body = re.search(r'METHOD_LIST\s*=\s*\[(.*?)\n\s*\];', text, re.S).group(1)
+
+classes = {m.group(1) for line in body.splitlines()
+           if (m := re.search(r'Method\\(.*?)::ACTION\s*=>', line))}
+
+actions = set()
+for cls in classes:
+    filename = cls.split(chr(92))[-1] + '.php'
+    for path in glob.glob('src/Module/Api/Method/**/' + filename, recursive=True):
+        content = open(path, encoding='utf-8').read()
+        if m := re.search(r"public const string ACTION\s*=\s*'([^']+)'", content):
+            actions.add(m.group(1))
+            break
+
+print(len(actions))  # 132
+```
+
+Run from the root of the Ampache checkout, then `comm -12/-23/-13` the sorted output against the
+attributed-methods list above to get the implemented / missing / extra sets.
