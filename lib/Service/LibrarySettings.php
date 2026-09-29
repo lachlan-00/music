@@ -48,6 +48,14 @@ class LibrarySettings {
 		return ((int)$value > 0);
 	}
 
+	public function setLastCleanTime(string $userId, int $time) : void {
+		$this->configManager->setUserValue($userId, $this->appName, 'last_clean_time', (string)$time);
+	}
+
+	public function getLastCleanTime(string $userId) : int {
+		return (int)$this->configManager->getUserValue($userId, $this->appName, 'last_clean_time', 0);
+	}
+
 	public function setIgnoredArticles(string $userId, array $articles) : void {
 		$this->configManager->setUserValue($userId, $this->appName, 'ignored_articles', \json_encode($articles));
 	}

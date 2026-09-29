@@ -47,13 +47,13 @@ use OCA\Music\Db\Track;
 use OCA\Music\Http\Attribute\AmpacheAPI;
 use OCA\Music\Http\ErrorResponse;
 use OCA\Music\Http\FileResponse;
-use OCA\Music\Http\FileStreamResponse;
 use OCA\Music\Http\RelayStreamResponse;
 use OCA\Music\Http\XmlResponse;
 use OCA\Music\Middleware\AmpacheException;
 use OCA\Music\Service\Ampache\AmpacheAdvSearch;
 use OCA\Music\Service\Ampache\AmpacheImageService;
 use OCA\Music\Service\Ampache\AmpachePreferences;
+use OCA\Music\Service\AudioTranscodeService;
 use OCA\Music\Service\CoverService;
 use OCA\Music\Service\DetailsService;
 use OCA\Music\Service\FileSystemService;
@@ -143,6 +143,7 @@ class AmpacheController extends ApiController {
 		private LibrarySettings $librarySettings,
 		private RadioService $radioService,
 		private StreamTokenService $streamTokenService,
+		private AudioTranscodeService $transcodeService,
 		private Random $random,
 		private Logger $logger,
 		private IScrobbler $scrobbler,
@@ -306,7 +307,7 @@ class AmpacheController extends ApiController {
 			'api'                 => $this->apiVersionString(),
 			'update'              => $updateTime->format('c'),
 			'add'                 => $addTime->format('c'),
-			'clean'               => \date('c', \time()), // TODO: actual time of the latest item removal
+			'clean'               => \date('c', $this->librarySettings->getLastCleanTime($user)),
 			'songs'               => $this->trackBusinessLayer->count($user),
 			'artists'             => $this->artistBusinessLayer->count($user),
 			'albums'              => $this->albumBusinessLayer->count($user),
@@ -1029,8 +1030,9 @@ class AmpacheController extends ApiController {
 	}
 
 	#[AmpacheAPI]
-	protected function podcasts(?string $filter, ?string $include, int $limit, int $offset = 0, bool $exact = false) : array {
-		$channels = $this->findEntities($this->podcastChannelBusinessLayer, $filter, $exact, $limit, $offset);
+	protected function podcasts(
+			?string $filter, ?string $include, ?string $add, ?string $update, int $limit, int $offset = 0, bool $exact = false) : array {
+		$channels = $this->findEntities($this->podcastChannelBusinessLayer, $filter, $exact, $limit, $offset, $add, $update);
 
 		if ($include === 'episodes') {
 			$this->injectEpisodesToChannels($channels);
@@ -1544,9 +1546,8 @@ class AmpacheController extends ApiController {
 	}
 
 	#[AmpacheAPI]
-	protected function download(int $id, string $type = 'song', bool $stats = false) : Response {
-		// request params `format` and `bitrate` are ignored
-
+	protected function download(
+			int $id, string $type = 'song', bool $stats = false, ?string $format = null, ?int $bitrate = null) : Response {
 		// On all errors, return HTTP error codes instead of Ampache errors. When client calls this action, it awaits a binary response
 		// and is probably not prepared to parse any Ampache json/xml responses.
 		$userId = $this->userId();
@@ -1560,7 +1561,9 @@ class AmpacheController extends ApiController {
 					if ($stats) {
 						$this->record_play($id, null);
 					}
-					return new FileStreamResponse($file);
+					// Ampache's `bitrate` argument is in bits per second, unlike the kbps used internally here and by Subsonic
+					$maxBitrateKbps = ($bitrate !== null) ? \intdiv($bitrate, 1000) : null;
+					return $this->transcodeService->responseForTrack($track, $file, $format, $maxBitrateKbps);
 				} else {
 					return new ErrorResponse(Http::STATUS_NOT_FOUND, "File for song $id does not exist");
 				}
@@ -1610,7 +1613,7 @@ class AmpacheController extends ApiController {
 				if ($randomId === null) {
 					return new ErrorResponse(Http::STATUS_NOT_FOUND, "The playlist $id is empty");
 				} else {
-					return $this->download((int)$randomId, 'song', $stats);
+					return $this->download((int)$randomId, 'song', $stats, $format, $bitrate);
 				}
 			} else {
 				return new ErrorResponse(Http::STATUS_UNSUPPORTED_MEDIA_TYPE, "Unsupported type '$type'");
@@ -1621,21 +1624,20 @@ class AmpacheController extends ApiController {
 	}
 
 	#[AmpacheAPI]
-	protected function stream(int $id, ?int $offset, string $type = 'song', bool $stats = true) : Response {
-		// request params `bitrate`, `format`, and `length` are ignored
+	protected function stream(
+			int $id, ?int $offset, string $type = 'song', bool $stats = true, ?string $format = null, ?int $bitrate = null) : Response {
+		// request param `length` (requesting an estimated Content-Length) is ignored
 
-		// This is just a dummy implementation. We don't support transcoding or streaming
-		// from a time offset.
-		// All the other unsupported arguments are just ignored, but a request with an offset
-		// is responded with an error. This is because the client would probably work in an
-		// unexpected way if it thinks it's streaming from offset but actually it is streaming
-		// from the beginning of the file. Returning an error gives the client a chance to fallback
-		// to other methods of seeking.
+		// We don't support streaming from a time offset. All the other unsupported arguments are just
+		// ignored, but a request with an offset is responded with an error. This is because the client
+		// would probably work in an unexpected way if it thinks it's streaming from offset but actually
+		// it is streaming from the beginning of the file. Returning an error gives the client a chance
+		// to fallback to other methods of seeking.
 		if ($offset !== null) {
 			return new ErrorResponse(Http::STATUS_UNSUPPORTED_MEDIA_TYPE, 'Streaming with time offset is not supported');
 		}
 
-		return $this->download($id, $type, $stats);
+		return $this->download($id, $type, $stats, $format, $bitrate);
 	}
 
 	#[AmpacheAPI]
@@ -2125,7 +2127,7 @@ class AmpacheController extends ApiController {
 			'gather_types'   => self::CATALOGS[$catalogId]['gather_types'],
 			'enabled'        => true,
 			'last_add'       => $addTime->getTimestamp(),
-			'last_clean'     => \time(), // we don't track the time of the latest removal, see also the action `handshake`
+			'last_clean'     => $isMusic ? $this->librarySettings->getLastCleanTime($userId) : 0,
 			'last_update'    => $updateTime->getTimestamp(),
 			'path'           => $isMusic ? $this->librarySettings->getPath($userId) : '',
 			'rename_pattern' => '',

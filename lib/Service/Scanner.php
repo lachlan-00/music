@@ -731,6 +731,7 @@ class Scanner extends PublicEmitter {
 				. "user $userId, removing: " . (string)\json_encode($unavailableFiles));
 			$this->deleteAudio($unavailableFiles, [$userId]);
 		}
+		$this->librarySettings->setLastCleanTime($userId, \time());
 		return $count;
 	}
 
