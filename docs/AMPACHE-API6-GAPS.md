@@ -279,6 +279,32 @@ canonical.
 **Parameter emptiness.** `Api6::check_parameter()` treats `null`, `''` and `[]` alike as missing, so
 `filter=` (empty) is a `4710` on Ampache rather than an unfiltered browse.
 
+**Parameter aliasing.** Several API6 actions accept one of their arguments under either of two names,
+falling back to the other if the preferred one is absent (surveyed across the whole reference tree,
+not just the entity-list actions above — `grep -rn "\$input\['\w\+'\] ?? \$input\['\w\+'\]"
+src/Module/Api/Method/` in the Ampache checkout finds all of them). We only accepted one name in each
+of these cases:
+
+| Action | Accepted here | Also accepts | Ampache source |
+|---|---|---|---|
+| `flag`, `rate`, `record_play`, `stream`, `download`, `get_art` | `id` | `filter` | `Api6\*Method::FILTER_ALIAS`/`FILTER_KEY` |
+| `update_podcast`, `podcast_update` | `id` | `filter` (the documented name; `id` is the alias, kept for the REST binding) | `UpdatePodcastMethod` |
+| `playlist_add_song` | `song` | `id` | `PlaylistAddSong6Method` |
+| `playlist_add` | `id`, `type` | `song`, `object_type` | `AbstractPlaylistAddMethod` |
+| `user` | `username` | `filter` (checked first) | `UserMethod` |
+| `search_songs` | `filter` | `rule_1_input` (checked first, i.e. wins if both given) | `AbstractSearchSongsMethod`/`SearchSongs6Method` |
+
+Fixed via a small per-action alias table in `AmpacheController::dispatch()` (`PARAM_ALIASES`) consumed
+by `RequestParameterExtractor`, rather than by renaming the parameters themselves, since `playlist_add`
+already uses `$filter` (the playlist) and `$id`/`$song` (the item being added) for two genuinely
+different things and a blanket rename would collide with it. `user` and `search_songs` are handled
+directly in the method body instead, since there the alias takes precedence over the primary name when
+both are given, the opposite of every other row here, and `PARAM_ALIASES` only expresses "use this as a
+fallback". Every other id-accepting action we implement (`song`, `album`, `podcast_edit`, …) only ever
+had the one name in Ampache to begin with, so this table is exhaustive, not a sample — checked against
+every `??`-chained pair of `$input[...]` reads in the reference tree, not just the ones resembling the
+`flag` case.
+
 ## Regenerating the action diff
 
 Ours are simply the attributed methods:

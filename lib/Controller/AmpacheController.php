@@ -115,6 +115,31 @@ class AmpacheController extends ApiController {
 	 */
 	private const DEPRECATED_ACTIONS = ['tag', 'tags', 'tag_albums', 'tag_artists', 'tag_songs'];
 
+	/**
+	 * Per-action map of a parameter name to an alternative name Ampache also accepts for it, used when
+	 * the primary name is missing from the request. `flag`, `rate`, `record_play`, `stream`, `download`
+	 * and `get_art` report the target object id as `id` (what API4/5 always used, and what API6 still
+	 * reports it as) but also accept `filter` as an alias (Ampache's `Api6\*Method::FILTER_ALIAS`/
+	 * `FILTER_KEY` pair). For `update_podcast`/`podcast_update` it's the other way around: `filter` is
+	 * the documented name and `id` is only an alias kept for the REST binding (`UpdatePodcastMethod`'s
+	 * own comment: "the rest route passes the podcast as `id`"). `playlist_add_song` accepts `id` as an
+	 * alias of `song`, and `playlist_add` accepts `song`/`object_type` as aliases of `id`/`type`
+	 * (`AbstractPlaylistAdd(Song)?Method`). Either way, whichever name is missing falls back to the
+	 * other, so which one is "the alias" here doesn't need to match which one Ampache calls canonical.
+	 */
+	private const PARAM_ALIASES = [
+		'flag'              => ['id' => 'filter'],
+		'rate'              => ['id' => 'filter'],
+		'record_play'       => ['id' => 'filter'],
+		'stream'            => ['id' => 'filter'],
+		'download'          => ['id' => 'filter'],
+		'get_art'           => ['id' => 'filter'],
+		'update_podcast'    => ['id' => 'filter'],
+		'podcast_update'    => ['id' => 'filter'],
+		'playlist_add_song' => ['song' => 'id'],
+		'playlist_add'      => ['id' => 'song', 'type' => 'object_type'],
+	];
+
 	public function __construct(
 		string $appName,
 		IRequest $request,
@@ -249,7 +274,8 @@ class AmpacheController extends ApiController {
 					return $value;
 				};
 
-				$parameterExtractor = new RequestParameterExtractor($this->request, ['limit' => $limitFilter]);
+				$paramAliases = self::PARAM_ALIASES[$action] ?? [];
+				$parameterExtractor = new RequestParameterExtractor($this->request, ['limit' => $limitFilter], $paramAliases);
 				try {
 					$parameterValues = $parameterExtractor->getParametersForMethod($reflection);
 				} catch (RequestParameterExtractorException $ex) {
@@ -764,8 +790,10 @@ class AmpacheController extends ApiController {
 	}
 
 	#[AmpacheAPI]
-	protected function search_songs(string $filter, int $limit, int $offset = 0) : array {
+	protected function search_songs(string $filter, int $limit, int $offset = 0, ?string $rule_1_input = null) : array {
 		$userId = $this->userId();
+		// On API6, `rule_1_input` is an alias for `filter` and, when both are given, takes precedence
+		$filter = $rule_1_input ?? $filter;
 		$tracks = $this->trackBusinessLayer->findAllByNameRecursive($filter, $userId, $limit, $offset);
 		return $this->renderSongs($tracks);
 	}
@@ -1561,7 +1589,9 @@ class AmpacheController extends ApiController {
 	}
 
 	#[AmpacheAPI]
-	protected function user(?string $username) : array {
+	protected function user(?string $username, ?string $filter = null) : array {
+		// `filter` is an alias for `username` and, when both are given, takes precedence
+		$username = $filter ?? $username;
 		$userId = $this->userId();
 		if (!empty($username) && \mb_strtolower($username) !== \mb_strtolower($userId)) {
 			throw new AmpacheException('Getting info of other users is forbidden', 403);
