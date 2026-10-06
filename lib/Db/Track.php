@@ -367,7 +367,8 @@ class Track extends Entity {
 			'audio_codec'            => $this->getFileExtension(),
 			'barcode'                => null,
 			'bitrate'                => $this->getBitrate(),
-			'catalog'                => null,
+			// all songs belong to the single synthetic music catalog (see AmpacheController::CATALOG_MUSIC_ID)
+			'catalog'                => 'music',
 			'catalog_number'         => null,
 			'channels'               => null,
 			'comment'                => $this->getComment(),
@@ -412,7 +413,7 @@ class Track extends Entity {
 			'summary'                => null,
 			'time'                   => $this->getLength(),
 			'title'                  => $this->getTitle(),
-			'totaldisks'             => null,
+			'totaldisks'             => $album->getNumberOfDisks(),
 			'totaltracks'            => null,
 			'track'                  => $this->getNumber(),
 			'year'                   => $this->getYear(),

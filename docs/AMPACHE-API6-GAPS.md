@@ -71,12 +71,13 @@ each, including what's honestly stubbed rather than faked:
   (or anything unrecognised) is rejected rather than resolved, since only songs have an entry to return.
 - **`song_tags`** — the real action returns raw per-file metadata (id3-style tags), not a genre list as
   originally assumed here. `Track::toAmpacheSongTagsApi()` mirrors Ampache's full field set so a client
-  can rely on the same keys always being present, but many of them have no equivalent in our data model
-  and are always `null`: `art`, `artists` (multi-artist credits), `barcode`, `catalog`,
-  `catalog_number`, `channels`, `description`, `disksubtitle`, `display_x`/`display_y` (video-only),
-  `encoding`, `frame_rate` (video-only), `isrc`, `language`, `mb_albumartistid(_array)`,
-  `mb_artistid_array`, `mode`, `original_name`, `original_year`, `release_date`, `release_status`,
-  `release_type`, `summary`, `totaldisks`, `totaltracks`, `version`.
+  can rely on the same keys always being present. `catalog` carries the synthetic music catalog id
+  (`'music'`, same convention as `podcast_episode.catalog`) and `totaldisks` comes from
+  `Album::getNumberOfDisks()`; the rest have no equivalent in our data model and are always `null`:
+  `art`, `artists` (multi-artist credits), `barcode`, `catalog_number`, `channels`, `description`,
+  `disksubtitle`, `display_x`/`display_y` (video-only), `encoding`, `frame_rate` (video-only), `isrc`,
+  `language`, `mb_albumartistid(_array)`, `mb_artistid_array`, `mode`, `original_name`, `original_year`,
+  `release_date`, `release_status`, `release_type`, `summary`, `totaltracks`, `version`.
 
 ### Tier 2 — implementable, no strong client pressure
 
@@ -216,9 +217,14 @@ non-nullable integer. Fixed to `0`, matching how `videos` is already reported as
 `clean` was hardcoded to the current time on every single call (`\date('c', \time())`), which made it
 useless as a change-detection signal — the whole point of the field. It, and the same-purpose
 `catalog` action's `last_clean`, now report a real, persisted timestamp: `LibrarySettings::
-getLastCleanTime()`/`setLastCleanTime()` track it per user, updated whenever `Scanner::
-removeUnavailableFiles()` runs, the same way Ampache's own `catalog.last_clean` is updated whenever a
-catalog clean/verify pass runs (whether or not it actually removed anything).
+getLastCleanTime()`/`setLastCleanTime()` track it per user. `Scanner::removeUnavailableFiles()` (the
+"change path to library" verify pass) still updates it unconditionally, the same way Ampache's own
+`catalog.last_clean` is updated whenever a catalog clean/verify pass runs (whether or not it actually
+removed anything) — but that function is only ever called from that one place, so relying on it alone
+would have missed every other removal path. `Scanner::deleteAudio()` also updates it, per affected user,
+since that's the actual choke point for track removal regardless of cause (a verify pass, a deleted
+file, a folder share being revoked), giving the signal much broader coverage than Ampache's own
+clean-pass-only semantics.
 
 ### `stream` / `download` — transcoding was accepted but silently ignored
 

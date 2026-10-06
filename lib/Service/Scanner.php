@@ -442,6 +442,10 @@ class Scanner extends PublicEmitter {
 				$result['obsoleteArtists']
 			);
 
+			foreach ($result['affectedUsers'] as $affectedUserId) {
+				$this->librarySettings->setLastCleanTime($affectedUserId, \time());
+			}
+
 			$this->logger->debug('removed entities: ' . \json_encode($result));
 			$this->emit(self::class, 'delete', [$result['deletedTracks'], $result['affectedUsers']]);
 		}
