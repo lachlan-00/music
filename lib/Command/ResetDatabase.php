@@ -15,6 +15,7 @@
 namespace OCA\Music\Command;
 
 use OCA\Music\Db\Maintenance;
+use OCA\Music\Service\LibrarySettings;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
@@ -24,6 +25,7 @@ class ResetDatabase extends BaseCommand {
 		\OCP\IUserManager $userManager,
 		\OCP\IGroupManager $groupManager,
 		private Maintenance $maintenance,
+		private LibrarySettings $librarySettings,
 	) {
 		parent::__construct($userManager, $groupManager);
 	}
@@ -42,6 +44,7 @@ class ResetDatabase extends BaseCommand {
 			foreach ($users as $user) {
 				$output->writeln("Drop tables for <info>$user</info>");
 				$this->maintenance->resetLibrary($user);
+				$this->librarySettings->setLastCleanTime($user, \time());
 			}
 		}
 	}

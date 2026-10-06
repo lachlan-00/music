@@ -217,14 +217,14 @@ non-nullable integer. Fixed to `0`, matching how `videos` is already reported as
 `clean` was hardcoded to the current time on every single call (`\date('c', \time())`), which made it
 useless as a change-detection signal — the whole point of the field. It, and the same-purpose
 `catalog` action's `last_clean`, now report a real, persisted timestamp: `LibrarySettings::
-getLastCleanTime()`/`setLastCleanTime()` track it per user. `Scanner::removeUnavailableFiles()` (the
-"change path to library" verify pass) still updates it unconditionally, the same way Ampache's own
-`catalog.last_clean` is updated whenever a catalog clean/verify pass runs (whether or not it actually
-removed anything) — but that function is only ever called from that one place, so relying on it alone
-would have missed every other removal path. `Scanner::deleteAudio()` also updates it, per affected user,
-since that's the actual choke point for track removal regardless of cause (a verify pass, a deleted
-file, a folder share being revoked), giving the signal much broader coverage than Ampache's own
-clean-pass-only semantics.
+getLastCleanTime()`/`setLastCleanTime()` track it per user. `Scanner::deleteAudio()` updates it, per
+affected user, since that's the actual choke point for track removal regardless of cause (a "change
+path to library" verify pass, a deleted file, a folder share being revoked) — so `Scanner::
+removeUnavailableFiles()` doesn't need to set it itself, as any removal it finds already goes through
+`deleteAudio()`. The other way a user's library disappears without going through `deleteAudio()` is a
+full wipe via `Maintenance::resetLibrary()`, so each call site that wipes a specific user's library
+(the web UI "reset scanned data" action, `occ music:reset-database <user>`, and `Scanner::updatePath()`
+erasing an unrelated old path) also updates the clean time right after.
 
 ### `stream` / `download` — transcoding was accepted but silently ignored
 

@@ -735,7 +735,6 @@ class Scanner extends PublicEmitter {
 				. "user $userId, removing: " . (string)\json_encode($unavailableFiles));
 			$this->deleteAudio($unavailableFiles, [$userId]);
 		}
-		$this->librarySettings->setLastCleanTime($userId, \time());
 		return $count;
 	}
 
@@ -814,10 +813,12 @@ class Scanner extends PublicEmitter {
 			} else {
 				$this->logger->debug('Old and new collection paths are unrelated, erasing the previous collection content');
 				$this->maintenance->resetLibrary($userId);
+				$this->librarySettings->setLastCleanTime($userId, \time());
 			}
 		} catch (\OCP\Files\NotFoundException $e) {
 			$this->logger->warning('One of the paths was invalid, erasing the previous collection content');
 			$this->maintenance->resetLibrary($userId);
+			$this->librarySettings->setLastCleanTime($userId, \time());
 		}
 	}
 
