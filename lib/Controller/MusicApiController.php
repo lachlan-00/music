@@ -173,7 +173,6 @@ class MusicApiController extends Controller {
 	#[UseSession] // keep the session reserved to serialize with the other scan-related endpoints
 	public function resetScanned() : JSONResponse {
 		$this->maintenance->resetLibrary($this->user());
-		$this->librarySettings->setLastCleanTime($this->user(), \time());
 		return new JSONResponse(['success' => true]);
 	}
 
